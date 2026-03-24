@@ -11,21 +11,59 @@
       <header class="app-header">
         <div>
           <h1>TrackSubFin</h1>
-          <p class="subtitle">Простой список подписок для дома</p>
+          <p class="subtitle">Общий список подписок для пары с синхронизацией в реальном времени</p>
         </div>
-        <button id="openSyncModalBtn" type="button" class="btn-secondary">Синхронизация</button>
       </header>
 
-      <section class="panel sync-panel">
+      <section id="firebaseSetupNotice" class="panel warning-panel hidden">
+        <h2>Нужна настройка Firebase</h2>
+        <p class="sub-meta">
+          Добавьте файл <code>firebase-config.js</code> на основе <code>firebase-config.template.js</code>,
+          затем обновите страницу.
+        </p>
+      </section>
+
+      <section class="panel auth-panel">
         <div class="panel-title-row">
-          <h2>Облако</h2>
-          <span id="syncStateBadge" class="sync-badge muted">Не подключено</span>
+          <h2>Аккаунт</h2>
+          <span id="authStateBadge" class="sync-badge muted">Не вошли</span>
         </div>
-        <p id="syncStatusText" class="sub-meta">Один раз подключи на каждом устройстве — дальше всё синхронизируется автоматически.</p>
+
+        <div id="userInfo" class="user-info hidden">
+          <img id="userAvatar" class="avatar" alt="Аватар" />
+          <div>
+            <p id="userName" class="user-name"></p>
+            <p id="userEmail" class="sub-meta"></p>
+          </div>
+        </div>
+
         <div class="sync-actions">
-          <button id="syncNowBtn" class="btn-primary" type="button" disabled>Синхронизировать сейчас</button>
-          <button id="disconnectSyncBtn" class="btn-danger" type="button" disabled>Отключить</button>
+          <button id="googleSignInBtn" class="btn-primary" type="button">Войти через Google</button>
+          <button id="signOutBtn" class="btn-secondary" type="button" disabled>Выйти</button>
         </div>
+      </section>
+
+      <section class="panel space-panel">
+        <div class="panel-title-row">
+          <h2>Общее пространство</h2>
+          <span id="spaceBadge" class="sync-badge muted">Не подключено</span>
+        </div>
+
+        <p id="spaceStatusText" class="sub-meta">Введите код пары, чтобы подключиться к общим подпискам.</p>
+
+        <form id="familyCodeForm" class="space-actions">
+          <input
+            id="familyCodeInput"
+            name="familyCode"
+            type="text"
+            minlength="4"
+            maxlength="12"
+            pattern="[A-Za-z0-9]{4,12}"
+            placeholder="Код пары, например A7K9Q2"
+          />
+          <button id="connectFamilyBtn" class="btn-primary" type="submit" disabled>Подключить</button>
+          <button id="generateFamilyBtn" class="btn-secondary" type="button" disabled>Создать код</button>
+        </form>
       </section>
 
       <section class="panel form-panel">
@@ -83,7 +121,7 @@
             <input name="endDate" type="date" />
           </label>
 
-          <button type="submit" class="btn-primary">Добавить подписку</button>
+          <button type="submit" class="btn-primary" id="addSubscriptionBtn" disabled>Добавить подписку</button>
         </form>
       </section>
 
@@ -101,57 +139,6 @@
       </section>
     </main>
 
-    <div id="syncModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="syncModalTitle">
-      <div class="modal-content panel">
-        <div class="panel-title-row">
-          <h2 id="syncModalTitle">Подключение синхронизации</h2>
-          <button id="closeSyncModalBtn" type="button" class="btn-ghost">✕</button>
-        </div>
-
-        <p class="sub-meta">Один раз подключи на каждом устройстве — дальше всё синхронизируется автоматически.</p>
-
-        <form id="syncConnectForm" class="form-grid">
-          <label>
-            Archive Code
-            <input
-              id="archiveCodeInput"
-              name="archiveCode"
-              type="text"
-              minlength="6"
-              maxlength="24"
-              pattern="[A-Za-z0-9-]{6,24}"
-              placeholder="my-family-2026"
-              required
-            />
-          </label>
-
-          <label>
-            GitHub Token
-            <div class="token-row">
-              <input
-                id="githubTokenInput"
-                name="githubToken"
-                type="password"
-                placeholder="ghp_..."
-                autocomplete="off"
-                required
-              />
-              <button id="toggleTokenBtn" type="button" class="btn-secondary">Показать</button>
-            </div>
-          </label>
-
-          <label class="toggle-row">
-            <input id="persistTokenCheckbox" name="persistToken" type="checkbox" checked />
-            <span>Запомнить на этом устройстве</span>
-          </label>
-
-          <button id="connectSyncBtn" type="submit" class="btn-primary">Подключить</button>
-        </form>
-
-        <p id="syncFormError" class="error-text hidden"></p>
-      </div>
-    </div>
-
     <template id="subscriptionCardTemplate">
       <article class="sub-card">
         <div class="sub-main">
@@ -166,6 +153,10 @@
       </article>
     </template>
 
-    <script src="app.js"></script>
+    <script>
+      window.TRACKSUBFIN_FIREBASE_CONFIG = window.TRACKSUBFIN_FIREBASE_CONFIG || null;
+    </script>
+    <script src="firebase-config.js"></script>
+    <script type="module" src="app.js"></script>
   </body>
 </html>
