@@ -1,66 +1,59 @@
 # TrackSubFin
 
-Простой трекер подписок для пары/семьи:
-- вход через Google в 1 клик,
-- общий список подписок по коду пары,
-- мгновенная синхронизация между устройствами через Firestore (`onSnapshot`).
+Простой трекер подписок для пары/семьи (Google Sign-In + Firestore realtime).
 
 Демо: **https://sdv-g-deploy.github.io/TrackSubFin/**
 
 ---
 
-## Быстрый запуск Firebase
+## Что изменено по security
 
-### 1) Создай проект в Firebase Console
-1. Открой [Firebase Console](https://console.firebase.google.com/)
-2. Нажми **Create project**
-3. Добавь Web App (иконка `</>`)
+### Почему одного `familyCode` недостаточно
+Если пускать по одному коду пространства, любой, кто узнал `familyCode`, может сам себе открыть доступ (IDOR / privilege escalation).
 
-### 2) Включи Google Sign-In
-1. **Authentication → Sign-in method**
-2. Включи **Google**
-3. Укажи email поддержки (если попросит)
+Теперь вход в существующее пространство только через **invite**:
+- `spaces/{familyCode}/invites/{inviteCode}`
+- проверка срока (`expiresAt`)
+- проверка лимита (`maxUses`, `usedCount`)
+- только после этого создаётся `members/{uid}`
 
-### 3) Добавь authorized domains
-В **Authentication → Settings → Authorized domains** добавь:
-- `sdv-g-deploy.github.io`
-- `localhost` (для локальных тестов)
-
-### 4) Создай Firestore
-1. **Firestore Database → Create database**
-2. Режим: любой (рекомендуется production mode)
-3. Выбери ближайший регион
-
-### 5) Заполни config
-1. Скопируй `firebase-config.template.js` в `firebase-config.js`
-2. Подставь web config из Firebase (Project settings → General → Your apps)
-
-После этого перезагрузи страницу — блок "Нужна настройка Firebase" исчезнет.
+> Для нового пространства (первый участник) используется безопасный bootstrap владельца через `spaces/{familyCode}/meta/access`.
 
 ---
 
-## Модель доступа (membership)
+## Новый flow (коротко)
 
-Структура данных:
-- `spaces/{familyCode}/members/{uid}` — участники пространства (кто имеет доступ)
+1. Войти через Google.
+2. Первый пользователь нажимает «Создать код» и «Подключить» (создаёт своё пространство).
+3. Первый пользователь нажимает «Создать инвайт».
+4. Второй пользователь вводит `familyCode + inviteCode` (или share-код `FAMILY-INVITE`) и подключается.
+5. После подключения оба видят и редактируют общий список подписок.
+
+---
+
+## Firestore структура
+
+- `spaces/{familyCode}/meta/access` — владелец пространства (bootstrap первого участника)
+- `spaces/{familyCode}/members/{uid}` — участники
+- `spaces/{familyCode}/invites/{inviteCode}` — инвайты
 - `spaces/{familyCode}/subscriptions/{id}` — подписки
 
-Как это работает:
-1. Пользователь входит через Google.
-2. Вводит/создаёт `familyCode`.
-3. Приложение автоматически (idempotent) записывает membership-документ
-   `spaces/{familyCode}/members/{uid}`.
-4. После этого разрешены чтение/запись подписок в этом `familyCode`.
+Пример invite-документа:
+```json
+{
+  "createdAt": "timestamp",
+  "createdBy": { "uid": "...", "email": "...", "name": "..." },
+  "expiresAt": "timestamp",
+  "maxUses": 1,
+  "usedCount": 0,
+  "usedBy": null,
+  "usedAt": null
+}
+```
 
 ---
 
-## Firestore Rules deployment
-
-В репозитории есть:
-- `firestore.rules`
-- `firebase.json`
-
-Деплой правил (один раз настроить CLI, далее по мере изменений):
+## Деплой Firestore rules
 
 ```bash
 npm i -g firebase-tools
@@ -69,31 +62,40 @@ firebase use <YOUR_FIREBASE_PROJECT_ID>
 firebase deploy --only firestore:rules
 ```
 
-Проверка:
+Проверить активные rules:
 ```bash
 firebase firestore:rules:get
 ```
 
 ---
 
-## Локальный запуск (важно: через HTTP)
+## Security regression checks (минимум)
 
-`file://`-открытие `index.html` для Firebase Auth не подходит.
+В проект добавлен скелет теста правил для Firebase Emulator:
+- `tests/firestore.rules.test.mjs`
+- script: `npm run test:rules` (после `npm i`)
 
-Запускай через локальный HTTP-сервер, например:
+Быстрый smoke-check синтаксиса JS:
+```bash
+npm run lint:smoke
+```
+
+---
+
+## Локальный запуск
 
 ```bash
-cd TrackSubFin
 python3 -m http.server 8080
 # или
 npx serve -l 8080
 ```
 
-Открой `http://localhost:8080`.
+Открыть: `http://localhost:8080`
+
+> `file://` для Firebase Auth не подходит.
 
 ---
 
 ## Deploy
 
-При push в `main` GitHub Actions автоматически публикует сайт на GitHub Pages (`.github/workflows/pages.yml`).
-Workflow публикует только runtime-файлы (`index.html`, `styles.css`, `app.js`, `firebase-service.js`, `firebase-config.js`, `assets/` если есть).
+При push в `main` GitHub Actions публикует сайт на GitHub Pages (`.github/workflows/pages.yml`).

@@ -1,0 +1,13 @@
+{
+  "name": "tracksubfin",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint:smoke": "node --check app.js && node --check firebase-service.js",
+    "test:rules": "node tests/firestore.rules.test.mjs"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^4.0.1",
+    "firebase": "^10.12.5"
+  }
+}

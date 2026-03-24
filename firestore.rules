@@ -6,35 +6,20 @@ service cloud.firestore {
     }
 
     function isMember(familyCode) {
-      return isSignedIn() &&
-        exists(/databases/$(database)/documents/spaces/$(familyCode)/members/$(request.auth.uid));
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/spaces/$(familyCode)/members/$(request.auth.uid));
     }
 
-    function hasOnlyAllowedKeys(data) {
+    function hasOnlyAllowedSubscriptionKeys(data) {
       return data.keys().hasOnly([
-        'name',
-        'price',
-        'frequency',
-        'customDays',
-        'nextChargeDate',
-        'cardName',
-        'cardLast4',
-        'endDate',
-        'createdAt',
-        'createdBy'
+        'name', 'price', 'frequency', 'customDays', 'nextChargeDate', 'cardName', 'cardLast4',
+        'endDate', 'createdAt', 'createdBy'
       ]);
     }
 
     function hasRequiredSubscriptionKeys(data) {
       return data.keys().hasAll([
-        'name',
-        'price',
-        'frequency',
-        'nextChargeDate',
-        'cardName',
-        'cardLast4',
-        'createdAt',
-        'createdBy'
+        'name', 'price', 'frequency', 'nextChargeDate', 'cardName', 'cardLast4', 'createdAt', 'createdBy'
       ]);
     }
 
@@ -48,7 +33,7 @@ service cloud.firestore {
     }
 
     function validBaseSubscription(data) {
-      return hasOnlyAllowedKeys(data)
+      return hasOnlyAllowedSubscriptionKeys(data)
         && hasRequiredSubscriptionKeys(data)
         && data.name is string
         && data.name.size() >= 1
@@ -89,17 +74,131 @@ service cloud.firestore {
         );
     }
 
+    function hasOnlyAllowedMemberKeys(data) {
+      return data.keys().hasOnly(['uid', 'email', 'name', 'inviteCode', 'createdAt', 'updatedAt']);
+    }
+
+    function validMemberBase(data, uid) {
+      return hasOnlyAllowedMemberKeys(data)
+        && data.uid == uid
+        && data.uid == request.auth.uid
+        && (data.email == null || data.email is string)
+        && (data.name == null || data.name is string)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function validInviteDoc(familyCode, inviteCode) {
+      return inviteCode is string
+        && inviteCode.matches('^[A-Za-z0-9]{10,14}$')
+        && exists(/databases/$(database)/documents/spaces/$(familyCode)/invites/$(inviteCode))
+        && get(/databases/$(database)/documents/spaces/$(familyCode)/invites/$(inviteCode)).data.expiresAt is timestamp
+        && get(/databases/$(database)/documents/spaces/$(familyCode)/invites/$(inviteCode)).data.expiresAt > request.time
+        && get(/databases/$(database)/documents/spaces/$(familyCode)/invites/$(inviteCode)).data.maxUses is int
+        && get(/databases/$(database)/documents/spaces/$(familyCode)/invites/$(inviteCode)).data.maxUses >= 1
+        && (
+          !(get(/databases/$(database)/documents/spaces/$(familyCode)/invites/$(inviteCode)).data.usedCount is int)
+          || get(/databases/$(database)/documents/spaces/$(familyCode)/invites/$(inviteCode)).data.usedCount
+             < get(/databases/$(database)/documents/spaces/$(familyCode)/invites/$(inviteCode)).data.maxUses
+        );
+    }
+
+    function hasOnlyAllowedInviteKeys(data) {
+      return data.keys().hasOnly([
+        'createdAt', 'createdBy', 'expiresAt', 'usedBy', 'usedAt', 'maxUses', 'usedCount'
+      ]);
+    }
+
+    function validInviteCreate(data) {
+      return hasOnlyAllowedInviteKeys(data)
+        && data.createdAt is timestamp
+        && data.expiresAt is timestamp
+        && data.expiresAt > request.time
+        && data.maxUses is int
+        && data.maxUses >= 1
+        && data.usedCount is int
+        && data.usedCount == 0
+        && (data.usedBy == null || data.usedBy is string)
+        && (data.usedAt == null || data.usedAt is timestamp)
+        && data.createdBy is map
+        && data.createdBy.keys().hasOnly(['uid', 'email', 'name'])
+        && data.createdBy.uid == request.auth.uid;
+    }
+
+    function validInviteUseUpdate(newData, oldData) {
+      return hasOnlyAllowedInviteKeys(newData)
+        && newData.createdAt == oldData.createdAt
+        && newData.createdBy == oldData.createdBy
+        && newData.expiresAt == oldData.expiresAt
+        && newData.maxUses == oldData.maxUses
+        && newData.usedCount is int
+        && oldData.usedCount is int
+        && newData.usedCount == oldData.usedCount + 1
+        && newData.usedCount <= newData.maxUses
+        && newData.usedBy == request.auth.uid
+        && newData.usedAt is timestamp;
+    }
+
     match /spaces/{familyCode} {
       allow read, write: if false;
 
+      match /meta/access {
+        allow read: if isMember(familyCode);
+        allow create: if isSignedIn()
+          && !exists(/databases/$(database)/documents/spaces/$(familyCode)/meta/access)
+          && request.resource.data.keys().hasOnly(['ownerUid', 'createdAt'])
+          && request.resource.data.ownerUid == request.auth.uid
+          && request.resource.data.createdAt is timestamp;
+        allow update, delete: if false;
+      }
+
       match /members/{uid} {
         allow read: if isMember(familyCode);
-        allow create, update: if isSignedIn() && uid == request.auth.uid;
+
+        allow create: if isSignedIn()
+          && uid == request.auth.uid
+          && validMemberBase(request.resource.data, uid)
+          && (
+            (
+              request.resource.data.inviteCode is string
+              && validInviteDoc(familyCode, request.resource.data.inviteCode)
+            )
+            || (
+              request.resource.data.inviteCode == 'OWNER_BOOTSTRAP'
+              && exists(/databases/$(database)/documents/spaces/$(familyCode)/meta/access)
+              && get(/databases/$(database)/documents/spaces/$(familyCode)/meta/access).data.ownerUid == request.auth.uid
+            )
+          );
+
+        allow update: if isSignedIn()
+          && uid == request.auth.uid
+          && resource.data.uid == request.auth.uid
+          && request.resource.data.uid == resource.data.uid
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.inviteCode == resource.data.inviteCode
+          && request.resource.data.updatedAt is timestamp
+          && request.resource.data.keys().hasOnly(['uid', 'email', 'name', 'inviteCode', 'createdAt', 'updatedAt'])
+          && (request.resource.data.email == null || request.resource.data.email is string)
+          && (request.resource.data.name == null || request.resource.data.name is string);
+
         allow delete: if false;
+      }
+
+      match /invites/{inviteCode} {
+        allow read: if isSignedIn();
+        allow create: if isMember(familyCode)
+          && inviteCode.matches('^[A-Za-z0-9]{10,14}$')
+          && validInviteCreate(request.resource.data);
+
+        allow update: if isSignedIn()
+          && validInviteUseUpdate(request.resource.data, resource.data);
+
+        allow delete: if isMember(familyCode);
       }
 
       match /subscriptions/{subscriptionId} {
         allow read: if isMember(familyCode);
+
         allow create: if isMember(familyCode)
           && validBaseSubscription(request.resource.data)
           && validFrequencyFields(request.resource.data)

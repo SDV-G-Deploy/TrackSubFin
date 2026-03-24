@@ -1,19 +1,23 @@
 import {
+  bootstrapSpaceOwner,
+  consumeInviteAndJoinFamily,
+  createInvite,
   createSubscription,
-  ensureFamilyMembership,
   hasFirebaseConfig,
   initFirebase,
+  isFamilyMember,
   loginWithGoogle,
   logout,
   removeSubscription,
+  touchMembership,
   watchAuth,
   watchSubscriptions,
 } from "./firebase-service.js";
 
-const CACHE_KEY = "tracksubfin.cache.v2";
-const FAMILY_CODE_KEY = "tracksubfin.familyCode.v1";
-const FAMILY_META_KEY = "tracksubfin.familyMeta.v1";
+const CACHE_KEY = "tracksubfin.cache.v3";
+const FAMILY_CODE_KEY = "tracksubfin.familyCode.v2";
 const FAMILY_CODE_RE = /^[A-Za-z0-9]{4,12}$/;
+const INVITE_CODE_RE = /^[A-Za-z0-9]{10,14}$/;
 const ALLOWED_FREQUENCIES = new Set(["monthly", "yearly", "custom-days"]);
 
 const firebaseSetupNotice = document.getElementById("firebaseSetupNotice");
@@ -34,16 +38,21 @@ const userEmailEl = document.getElementById("userEmail");
 const googleSignInBtn = document.getElementById("googleSignInBtn");
 const signOutBtn = document.getElementById("signOutBtn");
 
-const familyCodeForm = document.getElementById("familyCodeForm");
+const joinForm = document.getElementById("joinForm");
 const familyCodeInput = document.getElementById("familyCodeInput");
+const inviteCodeInput = document.getElementById("inviteCodeInput");
 const connectFamilyBtn = document.getElementById("connectFamilyBtn");
 const generateFamilyBtn = document.getElementById("generateFamilyBtn");
+const createInviteBtn = document.getElementById("createInviteBtn");
+const createdInviteBox = document.getElementById("createdInviteBox");
+const createdInviteCode = document.getElementById("createdInviteCode");
+const createdShareCode = document.getElementById("createdShareCode");
 const spaceBadge = document.getElementById("spaceBadge");
 const spaceStatusText = document.getElementById("spaceStatusText");
 
 let currentUser = null;
 let currentFamilyCode = (localStorage.getItem(FAMILY_CODE_KEY) || "").toUpperCase();
-let subscriptions = loadCachedSubscriptions();
+let subscriptions = [];
 let stopSubscriptionsWatcher = null;
 let firebaseReady = false;
 
@@ -71,10 +80,8 @@ function normalizeSubscription(raw) {
   if (!ALLOWED_FREQUENCIES.has(frequency)) return null;
   if (!Number.isFinite(price) || price < 0) return null;
   if (!nextChargeDate) return null;
-
   if (frequency === "custom-days" && customDays == null) return null;
   if (frequency !== "custom-days" && customDays != null) return null;
-
   if (endDate && endDate < nextChargeDate) return null;
 
   return {
@@ -95,28 +102,33 @@ function normalizeSubscriptions(rawItems) {
   return rawItems.map(normalizeSubscription).filter(Boolean);
 }
 
-function loadCachedSubscriptions() {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(CACHE_KEY) || "[]");
-    return normalizeSubscriptions(parsed);
-  } catch {
-    return [];
-  }
+function cacheKeyForUserSpace(uid, familyCode) {
+  return `${CACHE_KEY}:${uid}:${familyCode}`;
 }
 
 function saveCache() {
-  localStorage.setItem(CACHE_KEY, JSON.stringify(subscriptions));
+  if (!currentUser || !currentFamilyCode) return;
+  localStorage.setItem(cacheKeyForUserSpace(currentUser.uid, currentFamilyCode), JSON.stringify(subscriptions));
 }
 
 function clearSensitiveLocalState() {
-  localStorage.removeItem(CACHE_KEY);
+  Object.keys(localStorage)
+    .filter((k) => k.startsWith(`${CACHE_KEY}:`))
+    .forEach((k) => localStorage.removeItem(k));
+
   localStorage.removeItem(FAMILY_CODE_KEY);
-  localStorage.removeItem(FAMILY_META_KEY);
   subscriptions = [];
   currentFamilyCode = "";
   familyCodeInput.value = "";
+  inviteCodeInput.value = "";
+  hideCreatedInvite();
   stopRealtime();
   setSpaceDisconnected();
+  render();
+}
+
+function clearSubscriptionsView() {
+  subscriptions = [];
   render();
 }
 
@@ -163,6 +175,7 @@ function setAuthUiLoggedOut() {
   signOutBtn.disabled = true;
   connectFamilyBtn.disabled = true;
   generateFamilyBtn.disabled = true;
+  createInviteBtn.disabled = true;
   addSubscriptionBtn.disabled = true;
 }
 
@@ -178,21 +191,34 @@ function setAuthUiLoggedIn(user) {
   signOutBtn.disabled = false;
   connectFamilyBtn.disabled = false;
   generateFamilyBtn.disabled = false;
-  addSubscriptionBtn.disabled = !currentFamilyCode;
 }
 
 function setSpaceDisconnected() {
   spaceBadge.textContent = "Не подключено";
   spaceBadge.className = "sync-badge muted";
-  spaceStatusText.textContent = "Введите код пары, чтобы подключиться к общим подпискам.";
+  spaceStatusText.textContent = "Введите код пространства и инвайт-код.";
   addSubscriptionBtn.disabled = true;
+  createInviteBtn.disabled = true;
 }
 
 function setSpaceConnected(familyCode) {
-  spaceBadge.textContent = `Код пары: ${familyCode}`;
+  spaceBadge.textContent = `Пространство: ${familyCode}`;
   spaceBadge.className = "sync-badge ok";
-  spaceStatusText.textContent = "Синхронизация активна. Изменения сразу видны на других устройствах.";
+  spaceStatusText.textContent = "Синхронизация активна. Данные видны только участникам пространства.";
   addSubscriptionBtn.disabled = !currentUser;
+  createInviteBtn.disabled = !currentUser;
+}
+
+function showCreatedInvite(familyCode, inviteCode) {
+  createdInviteCode.textContent = inviteCode;
+  createdShareCode.textContent = `${familyCode}-${inviteCode}`;
+  createdInviteBox.classList.remove("hidden");
+}
+
+function hideCreatedInvite() {
+  createdInviteBox.classList.add("hidden");
+  createdInviteCode.textContent = "";
+  createdShareCode.textContent = "";
 }
 
 function renderTimeline(items) {
@@ -309,8 +335,9 @@ async function startRealtimeForFamilyCode(familyCode) {
   if (!currentUser) return;
 
   stopRealtime();
+  clearSubscriptionsView();
 
-  await ensureFamilyMembership(familyCode, currentUser);
+  await touchMembership(familyCode, currentUser);
   setSpaceConnected(familyCode);
 
   stopSubscriptionsWatcher = watchSubscriptions(
@@ -321,39 +348,90 @@ async function startRealtimeForFamilyCode(familyCode) {
       render();
     },
     () => {
-      spaceStatusText.textContent = "Нет связи. Показан последний локальный кэш.";
+      spaceStatusText.textContent = "Нет связи. Переподключитесь к пространству.";
       render();
     }
   );
 }
 
-async function connectFamilyCode(rawCode) {
-  const code = String(rawCode || "")
-    .trim()
-    .toUpperCase();
+function parseJoinInput(familyRaw, inviteRaw) {
+  const familyCode = String(familyRaw || "").trim().toUpperCase();
+  const inviteCodeRaw = String(inviteRaw || "").trim().toUpperCase();
 
-  if (!FAMILY_CODE_RE.test(code)) {
-    alert("Код пары: 4–12 символов, только латинские буквы и цифры.");
+  if (inviteCodeRaw.includes("-")) {
+    const [space, invite] = inviteCodeRaw.split("-");
+    return {
+      familyCode: (space || "").trim().toUpperCase(),
+      inviteCode: (invite || "").trim().toUpperCase(),
+    };
+  }
+
+  return { familyCode, inviteCode: inviteCodeRaw };
+}
+
+async function connectToSpace(rawFamilyCode, rawInviteCode) {
+  const parsed = parseJoinInput(rawFamilyCode, rawInviteCode);
+  const familyCode = parsed.familyCode;
+  const inviteCode = parsed.inviteCode;
+
+  if (!FAMILY_CODE_RE.test(familyCode)) {
+    alert("Код пространства: 4–12 символов, только латиница и цифры.");
     return false;
   }
 
-  currentFamilyCode = code;
-  localStorage.setItem(FAMILY_CODE_KEY, code);
-  familyCodeInput.value = code;
+  const alreadyMember = await isFamilyMember(familyCode, currentUser.uid);
 
-  if (currentUser) {
-    await startRealtimeForFamilyCode(code);
+  if (!alreadyMember) {
+    if (!inviteCode) {
+      try {
+        await bootstrapSpaceOwner(familyCode, currentUser);
+      } catch {
+        alert("Для входа в существующее пространство нужен инвайт-код.");
+        return false;
+      }
+    } else {
+      if (!INVITE_CODE_RE.test(inviteCode)) {
+        alert("Для подключения нужен инвайт-код (10–14 символов).");
+        return false;
+      }
+
+      try {
+        await consumeInviteAndJoinFamily(familyCode, inviteCode, currentUser);
+      } catch (error) {
+        if (error?.message === "INVITE_NOT_FOUND") {
+          alert("Инвайт не найден. Проверьте код.");
+        } else if (error?.message === "INVITE_EXPIRED") {
+          alert("Инвайт просрочен. Попросите новый.");
+        } else if (error?.message === "INVITE_LIMIT") {
+          alert("Лимит инвайта исчерпан. Попросите новый.");
+        } else {
+          alert("Не удалось подключиться. Проверьте правила Firestore и интернет.");
+        }
+        return false;
+      }
+    }
   }
 
+  currentFamilyCode = familyCode;
+  localStorage.setItem(FAMILY_CODE_KEY, familyCode);
+  familyCodeInput.value = familyCode;
+
+  await startRealtimeForFamilyCode(familyCode);
   return true;
 }
 
 function randomFamilyCode() {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let code = "";
-  for (let i = 0; i < 6; i += 1) {
-    code += alphabet[Math.floor(Math.random() * alphabet.length)];
-  }
+  for (let i = 0; i < 6; i += 1) code += alphabet[Math.floor(Math.random() * alphabet.length)];
+  return code;
+}
+
+function randomInviteCode() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const length = 12;
+  let code = "";
+  for (let i = 0; i < length; i += 1) code += alphabet[Math.floor(Math.random() * alphabet.length)];
   return code;
 }
 
@@ -368,7 +446,7 @@ googleSignInBtn.addEventListener("click", async () => {
   try {
     await loginWithGoogle();
   } catch {
-    alert("Не удалось войти через Google. Проверьте, что домен добавлен в Authorized domains.");
+    alert("Не удалось войти через Google. Проверьте Authorized domains.");
     googleSignInBtn.disabled = false;
   }
 });
@@ -376,28 +454,45 @@ googleSignInBtn.addEventListener("click", async () => {
 signOutBtn.addEventListener("click", async () => {
   try {
     await logout();
-    clearSensitiveLocalState();
   } catch {
     alert("Не удалось выйти из аккаунта.");
   }
 });
 
-familyCodeForm.addEventListener("submit", async (event) => {
+joinForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (!currentUser) {
+    alert("Сначала войдите через Google.");
+    return;
+  }
+
+  connectFamilyBtn.disabled = true;
   try {
-    await connectFamilyCode(familyCodeInput.value);
-  } catch {
-    alert("Не удалось подключить код пары. Проверьте интернет и права доступа.");
+    await connectToSpace(familyCodeInput.value, inviteCodeInput.value);
+  } finally {
+    connectFamilyBtn.disabled = false;
   }
 });
 
 generateFamilyBtn.addEventListener("click", async () => {
   const code = randomFamilyCode();
   familyCodeInput.value = code;
+  inviteCodeInput.value = "";
+  spaceStatusText.textContent = "Код создан. Нажмите «Подключить» — пространство создастся и вы станете первым участником.";
+});
+
+createInviteBtn.addEventListener("click", async () => {
+  if (!currentUser || !currentFamilyCode) return;
+
+  const inviteCode = randomInviteCode();
+  createInviteBtn.disabled = true;
   try {
-    await connectFamilyCode(code);
+    await createInvite(currentFamilyCode, currentUser, inviteCode, 1, 72);
+    showCreatedInvite(currentFamilyCode, inviteCode);
   } catch {
-    alert("Не удалось создать пространство. Проверьте интернет и права доступа.");
+    alert("Не удалось создать инвайт. Проверьте права и интернет.");
+  } finally {
+    createInviteBtn.disabled = false;
   }
 });
 
@@ -405,7 +500,7 @@ form.addEventListener("submit", async (e) => {
   e.preventDefault();
 
   if (!currentUser || !currentFamilyCode) {
-    alert("Сначала войдите через Google и подключите код пары.");
+    alert("Сначала войдите и подключите пространство.");
     return;
   }
 
@@ -416,35 +511,14 @@ form.addEventListener("submit", async (e) => {
   const nextChargeDate = parseIsoDateOrNull(fd.get("nextChargeDate"));
   const endDate = fd.get("endDate") ? parseIsoDateOrNull(fd.get("endDate")) : null;
 
-  if (!ALLOWED_FREQUENCIES.has(frequency)) {
-    alert("Некорректная периодичность.");
-    return;
-  }
-
-  if (!Number.isFinite(price) || price < 0) {
-    alert("Цена должна быть числом не меньше 0.");
-    return;
-  }
-
+  if (!ALLOWED_FREQUENCIES.has(frequency)) return alert("Некорректная периодичность.");
+  if (!Number.isFinite(price) || price < 0) return alert("Цена должна быть числом не меньше 0.");
   if (frequency === "custom-days" && !(Number.isInteger(customDaysValue) && customDaysValue >= 1)) {
-    alert("Для «Каждые N дней» укажите целое количество дней (минимум 1).");
-    return;
+    return alert("Для «Каждые N дней» укажите целое количество дней (минимум 1).");
   }
-
-  if (!nextChargeDate) {
-    alert("Укажите корректную дату следующего списания.");
-    return;
-  }
-
-  if (fd.get("endDate") && !endDate) {
-    alert("Укажите корректную дату окончания.");
-    return;
-  }
-
-  if (endDate && endDate < nextChargeDate) {
-    alert("Дата окончания не может быть раньше даты следующего списания.");
-    return;
-  }
+  if (!nextChargeDate) return alert("Укажите корректную дату следующего списания.");
+  if (fd.get("endDate") && !endDate) return alert("Укажите корректную дату окончания.");
+  if (endDate && endDate < nextChargeDate) return alert("Дата окончания не может быть раньше списания.");
 
   const entry = {
     name: String(fd.get("name") || "").trim(),
@@ -487,13 +561,25 @@ if (!hasFirebaseConfig()) {
 
     if (user) {
       setAuthUiLoggedIn(user);
+      hideCreatedInvite();
+
       if (currentFamilyCode) {
         try {
-          await startRealtimeForFamilyCode(currentFamilyCode);
+          const hasMembership = await isFamilyMember(currentFamilyCode, user.uid);
+          if (hasMembership) {
+            await startRealtimeForFamilyCode(currentFamilyCode);
+          } else {
+            stopRealtime();
+            clearSubscriptionsView();
+            setSpaceDisconnected();
+            spaceBadge.textContent = `Пространство: ${currentFamilyCode}`;
+            spaceBadge.className = "sync-badge warn";
+            spaceStatusText.textContent = "Нужен инвайт-код для входа в это пространство.";
+          }
         } catch {
-          spaceBadge.textContent = `Код пары: ${currentFamilyCode}`;
-          spaceBadge.className = "sync-badge warn";
-          spaceStatusText.textContent = "Нет доступа к пространству. Проверьте код пары.";
+          stopRealtime();
+          clearSubscriptionsView();
+          setSpaceDisconnected();
         }
       } else {
         setSpaceDisconnected();
@@ -501,13 +587,7 @@ if (!hasFirebaseConfig()) {
     } else {
       stopRealtime();
       setAuthUiLoggedOut();
-      if (currentFamilyCode) {
-        spaceBadge.textContent = `Код пары: ${currentFamilyCode}`;
-        spaceBadge.className = "sync-badge warn";
-        spaceStatusText.textContent = "Войдите через Google, чтобы открыть общее пространство.";
-      } else {
-        setSpaceDisconnected();
-      }
+      clearSensitiveLocalState();
     }
   });
 }

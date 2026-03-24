@@ -49,9 +49,9 @@
           <span id="spaceBadge" class="sync-badge muted">Не подключено</span>
         </div>
 
-        <p id="spaceStatusText" class="sub-meta">Введите код пары, чтобы подключиться к общим подпискам.</p>
+        <p id="spaceStatusText" class="sub-meta">Введите код пространства и инвайт-код.</p>
 
-        <form id="familyCodeForm" class="space-actions">
+        <form id="joinForm" class="space-actions">
           <input
             id="familyCodeInput"
             name="familyCode"
@@ -59,11 +59,25 @@
             minlength="4"
             maxlength="12"
             pattern="[A-Za-z0-9]{4,12}"
-            placeholder="Код пары, например A7K9Q2"
+            placeholder="Код пространства, например A7K9Q2"
+          />
+          <input
+            id="inviteCodeInput"
+            name="inviteCode"
+            type="text"
+            minlength="10"
+            maxlength="24"
+            placeholder="Инвайт или share-код"
           />
           <button id="connectFamilyBtn" class="btn-primary" type="submit" disabled>Подключить</button>
           <button id="generateFamilyBtn" class="btn-secondary" type="button" disabled>Создать код</button>
+          <button id="createInviteBtn" class="btn-secondary" type="button" disabled>Создать инвайт</button>
         </form>
+
+        <div id="createdInviteBox" class="invite-box hidden">
+          <p><strong>Инвайт:</strong> <code id="createdInviteCode"></code></p>
+          <p class="sub-meta"><strong>Share-код:</strong> <code id="createdShareCode"></code></p>
+        </div>
       </section>
 
       <section class="panel form-panel">
