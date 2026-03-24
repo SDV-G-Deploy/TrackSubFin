@@ -18,23 +18,93 @@ const syncConnectForm = document.getElementById("syncConnectForm");
 const archiveCodeInput = document.getElementById("archiveCodeInput");
 const githubTokenInput = document.getElementById("githubTokenInput");
 const toggleTokenBtn = document.getElementById("toggleTokenBtn");
+const persistTokenCheckbox = document.getElementById("persistTokenCheckbox");
 const syncFormError = document.getElementById("syncFormError");
 const syncNowBtn = document.getElementById("syncNowBtn");
 const disconnectSyncBtn = document.getElementById("disconnectSyncBtn");
 const syncStateBadge = document.getElementById("syncStateBadge");
 const syncStatusText = document.getElementById("syncStatusText");
 
+const conflictModal = document.getElementById("conflictModal");
+const closeConflictModalBtn = document.getElementById("closeConflictModalBtn");
+const conflictCloudMeta = document.getElementById("conflictCloudMeta");
+const conflictLocalMeta = document.getElementById("conflictLocalMeta");
+const useCloudBtn = document.getElementById("useCloudBtn");
+const useLocalBtn = document.getElementById("useLocalBtn");
+const cancelConflictBtn = document.getElementById("cancelConflictBtn");
+
 /** @type {Array<any>} */
-let subscriptions = loadSubscriptions();
+let subscriptions = [];
+let localMeta = { updatedAt: new Date(0).toISOString(), revision: "", version: 1 };
 let syncConfig = loadSyncConfig();
+let runtimeToken = syncConfig?.persistToken ? syncConfig?.token || "" : "";
 let autosaveTimeout = null;
 
-function loadSubscriptions() {
-  try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
-  } catch {
-    return [];
+hydrateLocalState();
+
+function stableSubscriptionsString(items) {
+  return JSON.stringify(items || []);
+}
+
+function computeRevision(items) {
+  const str = stableSubscriptionsString(items);
+  let hash = 2166136261;
+  for (let i = 0; i < str.length; i += 1) {
+    hash ^= str.charCodeAt(i);
+    hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
   }
+  return `r${(hash >>> 0).toString(16)}`;
+}
+
+function normalizePayload(payload) {
+  const safeSubscriptions = Array.isArray(payload?.subscriptions) ? payload.subscriptions : [];
+  const revision = payload?.revision || computeRevision(safeSubscriptions);
+  const updatedAt = payload?.updatedAt || new Date().toISOString();
+
+  return {
+    version: 1,
+    subscriptions: safeSubscriptions,
+    updatedAt,
+    revision,
+  };
+}
+
+function hydrateLocalState() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
+
+    if (Array.isArray(parsed)) {
+      subscriptions = parsed;
+      localMeta = {
+        version: 1,
+        updatedAt: new Date().toISOString(),
+        revision: computeRevision(subscriptions),
+      };
+      persistLocalState();
+      return;
+    }
+
+    if (parsed && typeof parsed === "object") {
+      const normalized = normalizePayload(parsed);
+      subscriptions = normalized.subscriptions;
+      localMeta = {
+        version: normalized.version,
+        updatedAt: normalized.updatedAt,
+        revision: normalized.revision,
+      };
+      return;
+    }
+  } catch {
+    // fallback below
+  }
+
+  subscriptions = [];
+  localMeta = {
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    revision: computeRevision(subscriptions),
+  };
+  persistLocalState();
 }
 
 function loadSyncConfig() {
@@ -51,12 +121,48 @@ function saveSyncConfig() {
     localStorage.removeItem(SYNC_STORAGE_KEY);
     return;
   }
-  localStorage.setItem(SYNC_STORAGE_KEY, JSON.stringify(syncConfig));
+
+  const persisted = {
+    ...syncConfig,
+    token: syncConfig.persistToken ? runtimeToken : undefined,
+  };
+
+  if (!syncConfig.persistToken) {
+    delete persisted.token;
+  }
+
+  localStorage.setItem(SYNC_STORAGE_KEY, JSON.stringify(persisted));
+}
+
+function persistLocalState() {
+  localStorage.setItem(
+    STORAGE_KEY,
+    JSON.stringify({
+      version: 1,
+      updatedAt: localMeta.updatedAt,
+      revision: localMeta.revision,
+      subscriptions,
+    })
+  );
+}
+
+function markLocalChanged() {
+  localMeta.updatedAt = new Date().toISOString();
+  localMeta.revision = computeRevision(subscriptions);
+  persistLocalState();
 }
 
 function saveSubscriptions() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(subscriptions));
+  markLocalChanged();
   scheduleAutosave();
+}
+
+function applyCloudPayload(payload) {
+  const normalized = normalizePayload(payload);
+  subscriptions = normalized.subscriptions;
+  localMeta.updatedAt = normalized.updatedAt;
+  localMeta.revision = normalized.revision;
+  persistLocalState();
 }
 
 function gistDescription(code) {
@@ -75,9 +181,19 @@ function getHeaders(token) {
 function syncPayload() {
   return {
     version: 1,
-    updatedAt: new Date().toISOString(),
+    updatedAt: localMeta.updatedAt,
+    revision: localMeta.revision,
     subscriptions,
   };
+}
+
+function localHasUnsyncedChanges() {
+  if (!syncConfig?.lastSyncedRevision) return subscriptions.length > 0;
+  return localMeta.revision !== syncConfig.lastSyncedRevision;
+}
+
+function hasSessionTokenOnly() {
+  return Boolean(syncConfig?.gistId) && !syncConfig?.persistToken;
 }
 
 async function githubFetch(url, options, token) {
@@ -141,15 +257,27 @@ async function createGist(code, token) {
   return response.json();
 }
 
-function parseGistSubscriptions(gist) {
+function parseGistPayload(gist) {
   const file = gist?.files?.[GIST_FILENAME];
-  if (!file?.content) return [];
+  if (!file?.content) {
+    return {
+      version: 1,
+      updatedAt: new Date(0).toISOString(),
+      revision: computeRevision([]),
+      subscriptions: [],
+    };
+  }
 
   try {
     const parsed = JSON.parse(file.content);
-    return Array.isArray(parsed?.subscriptions) ? parsed.subscriptions : [];
+    return normalizePayload(parsed);
   } catch {
-    return [];
+    return {
+      version: 1,
+      updatedAt: new Date(0).toISOString(),
+      revision: computeRevision([]),
+      subscriptions: [],
+    };
   }
 }
 
@@ -159,7 +287,7 @@ async function loadFullGist(gistId, token) {
 }
 
 async function pushToCloud(statusText = "Синхронизация выполнена") {
-  if (!syncConfig?.token || !syncConfig?.gistId) return;
+  if (!syncConfig?.gistId || !runtimeToken) return;
 
   const response = await githubFetch(
     `https://api.github.com/gists/${syncConfig.gistId}`,
@@ -173,18 +301,20 @@ async function pushToCloud(statusText = "Синхронизация выполн
         },
       }),
     },
-    syncConfig.token
+    runtimeToken
   );
 
   await response.json();
   syncConfig.lastSyncAt = new Date().toISOString();
   syncConfig.lastSyncStatus = statusText;
+  syncConfig.lastSyncedRevision = localMeta.revision;
+  syncConfig.lastKnownCloudUpdatedAt = localMeta.updatedAt;
   saveSyncConfig();
   renderSyncState();
 }
 
 function scheduleAutosave() {
-  if (!syncConfig?.gistId || !syncConfig?.token) return;
+  if (!syncConfig?.gistId || !runtimeToken) return;
   if (autosaveTimeout) clearTimeout(autosaveTimeout);
 
   autosaveTimeout = setTimeout(async () => {
@@ -320,15 +450,25 @@ function renderSyncState() {
     return;
   }
 
-  syncStateBadge.textContent = `Подключено: ${syncConfig.archiveCode}`;
-  syncStateBadge.className = "sync-badge ok";
+  if (hasSessionTokenOnly() && !runtimeToken) {
+    syncStateBadge.textContent = `Подключено: ${syncConfig.archiveCode}`;
+    syncStateBadge.className = "sync-badge warn";
+    syncStatusText.textContent = "Требуется токен для синхронизации после перезагрузки.";
+    syncNowBtn.disabled = true;
+    disconnectSyncBtn.disabled = false;
+    return;
+  }
 
+  syncStateBadge.textContent = `Подключено: ${syncConfig.archiveCode}`;
+  syncStateBadge.className = hasSessionTokenOnly() ? "sync-badge warn" : "sync-badge ok";
+
+  const tokenMode = hasSessionTokenOnly() ? " Токен: только текущая сессия." : " Токен хранится локально.";
   const syncAt = syncConfig.lastSyncAt
     ? ` Последняя синхра: ${new Date(syncConfig.lastSyncAt).toLocaleString("ru-RU")}.`
     : "";
-  syncStatusText.textContent = `${syncConfig.lastSyncStatus || "Готово"}.${syncAt}`;
+  syncStatusText.textContent = `${syncConfig.lastSyncStatus || "Готово"}.${tokenMode}${syncAt}`;
 
-  syncNowBtn.disabled = false;
+  syncNowBtn.disabled = !runtimeToken;
   disconnectSyncBtn.disabled = false;
 }
 
@@ -358,9 +498,56 @@ function closeModal() {
   clearSyncError();
 }
 
+function openConflictModal(localPayload, cloudPayload) {
+  return new Promise((resolve) => {
+    const cloudDate = new Date(cloudPayload.updatedAt).toLocaleString("ru-RU");
+    const localDate = new Date(localPayload.updatedAt).toLocaleString("ru-RU");
+
+    conflictCloudMeta.textContent = `Облако: ${cloudDate}, ревизия ${cloudPayload.revision}`;
+    conflictLocalMeta.textContent = `Локально: ${localDate}, ревизия ${localPayload.revision}`;
+
+    const cleanup = () => {
+      conflictModal.classList.add("hidden");
+      useCloudBtn.removeEventListener("click", onCloud);
+      useLocalBtn.removeEventListener("click", onLocal);
+      cancelConflictBtn.removeEventListener("click", onCancel);
+      closeConflictModalBtn.removeEventListener("click", onCancel);
+      conflictModal.removeEventListener("click", onBackdrop);
+    };
+
+    const onCloud = () => {
+      cleanup();
+      resolve("cloud");
+    };
+
+    const onLocal = () => {
+      cleanup();
+      resolve("local");
+    };
+
+    const onCancel = () => {
+      cleanup();
+      resolve("cancel");
+    };
+
+    const onBackdrop = (event) => {
+      if (event.target === conflictModal) onCancel();
+    };
+
+    useCloudBtn.addEventListener("click", onCloud);
+    useLocalBtn.addEventListener("click", onLocal);
+    cancelConflictBtn.addEventListener("click", onCancel);
+    closeConflictModalBtn.addEventListener("click", onCancel);
+    conflictModal.addEventListener("click", onBackdrop);
+
+    conflictModal.classList.remove("hidden");
+  });
+}
+
 openSyncModalBtn.addEventListener("click", () => {
   archiveCodeInput.value = syncConfig?.archiveCode || "";
-  githubTokenInput.value = syncConfig?.token || "";
+  githubTokenInput.value = runtimeToken || "";
+  persistTokenCheckbox.checked = Boolean(syncConfig?.persistToken);
   githubTokenInput.type = "password";
   toggleTokenBtn.textContent = "Показать";
   openModal();
@@ -389,6 +576,7 @@ syncConnectForm.addEventListener("submit", async (event) => {
 
   const archiveCode = archiveCodeInput.value.trim();
   const token = githubTokenInput.value.trim();
+  const persistToken = persistTokenCheckbox.checked;
 
   if (!ARCHIVE_CODE_RE.test(archiveCode)) {
     showSyncError("Archive Code: 6-24 символов, только латиница/цифры/дефис.");
@@ -409,24 +597,68 @@ syncConnectForm.addEventListener("submit", async (event) => {
     const gistExisted = Boolean(gist);
 
     if (!gist) {
+      runtimeToken = token;
+      syncConfig = {
+        archiveCode,
+        gistId: null,
+        persistToken,
+        lastSyncAt: null,
+        lastSyncStatus: "Подключено. Создано новое облако.",
+        lastSyncedRevision: null,
+        lastKnownCloudUpdatedAt: null,
+      };
+
       gist = await createGist(archiveCode, token);
-    } else {
-      gist = await loadFullGist(gist.id, token);
-      subscriptions = parseGistSubscriptions(gist);
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(subscriptions));
+      syncConfig.gistId = gist.id;
+      syncConfig.lastSyncAt = new Date().toISOString();
+      syncConfig.lastSyncedRevision = localMeta.revision;
+      syncConfig.lastKnownCloudUpdatedAt = localMeta.updatedAt;
+      saveSyncConfig();
+      render();
+      closeModal();
+      return;
     }
 
+    gist = await loadFullGist(gist.id, token);
+    const cloudPayload = parseGistPayload(gist);
+    const localPayload = syncPayload();
+
+    const cloudIsNewer = new Date(cloudPayload.updatedAt).getTime() > new Date(localPayload.updatedAt).getTime();
+    const localUnsynced = cloudPayload.revision !== localPayload.revision;
+
+    let conflictChoice = "cloud";
+    if (cloudIsNewer && localUnsynced) {
+      conflictChoice = await openConflictModal(localPayload, cloudPayload);
+      if (conflictChoice === "cancel") {
+        showSyncError("Подключение отменено: выберите вариант разрешения конфликта, когда будете готовы.");
+        return;
+      }
+    }
+
+    runtimeToken = token;
     syncConfig = {
       archiveCode,
-      token,
       gistId: gist.id,
+      persistToken,
       lastSyncAt: new Date().toISOString(),
-      lastSyncStatus: gistExisted ? "Подключено. Облако загружено." : "Подключено. Создано новое облако.",
+      lastSyncStatus: gistExisted ? "Подключено." : "Подключено. Создано новое облако.",
+      lastSyncedRevision: null,
+      lastKnownCloudUpdatedAt: null,
     };
 
-    saveSyncConfig();
+    if (conflictChoice === "cloud") {
+      applyCloudPayload(cloudPayload);
+      syncConfig.lastSyncStatus = "Подключено. Использована версия из облака.";
+      syncConfig.lastSyncedRevision = localMeta.revision;
+      syncConfig.lastKnownCloudUpdatedAt = localMeta.updatedAt;
+      saveSyncConfig();
+      render();
+      closeModal();
+      return;
+    }
 
-    await pushToCloud("Синхронизация после подключения выполнена");
+    await pushToCloud("Подключено. Локальная версия отправлена в облако.");
+    saveSyncConfig();
     render();
     closeModal();
   } catch (err) {
@@ -440,22 +672,57 @@ syncConnectForm.addEventListener("submit", async (event) => {
 syncNowBtn.addEventListener("click", async () => {
   if (!syncConfig?.gistId) return;
 
+  if (!runtimeToken) {
+    showSyncError("Для ручной синхронизации введите токен заново через «Синхронизация».");
+    openModal();
+    return;
+  }
+
   syncNowBtn.disabled = true;
   syncNowBtn.textContent = "Синхронизация...";
   try {
+    const gist = await loadFullGist(syncConfig.gistId, runtimeToken);
+    const cloudPayload = parseGistPayload(gist);
+    const localPayload = syncPayload();
+
+    const cloudIsNewer = new Date(cloudPayload.updatedAt).getTime() > new Date(localPayload.updatedAt).getTime();
+    const localUnsynced = localHasUnsyncedChanges() && cloudPayload.revision !== localPayload.revision;
+
+    if (cloudIsNewer && localUnsynced) {
+      const choice = await openConflictModal(localPayload, cloudPayload);
+      if (choice === "cancel") {
+        syncConfig.lastSyncStatus = "Ручная синхронизация отменена пользователем.";
+        saveSyncConfig();
+        renderSyncState();
+        return;
+      }
+
+      if (choice === "cloud") {
+        applyCloudPayload(cloudPayload);
+        syncConfig.lastSyncAt = new Date().toISOString();
+        syncConfig.lastSyncStatus = "Ручная синхронизация: применена версия из облака.";
+        syncConfig.lastSyncedRevision = localMeta.revision;
+        syncConfig.lastKnownCloudUpdatedAt = localMeta.updatedAt;
+        saveSyncConfig();
+        render();
+        return;
+      }
+    }
+
     await pushToCloud("Ручная синхронизация выполнена");
   } catch (err) {
     syncConfig.lastSyncStatus = `Ошибка ручной синхры: ${err.message}`;
     saveSyncConfig();
     renderSyncState();
   } finally {
-    syncNowBtn.disabled = false;
+    syncNowBtn.disabled = !runtimeToken;
     syncNowBtn.textContent = "Синхронизировать сейчас";
   }
 });
 
 disconnectSyncBtn.addEventListener("click", () => {
   syncConfig = null;
+  runtimeToken = "";
   saveSyncConfig();
   renderSyncState();
 });

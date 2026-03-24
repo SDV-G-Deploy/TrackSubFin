@@ -136,13 +136,38 @@
               />
               <button id="toggleTokenBtn" type="button" class="btn-secondary">Показать</button>
             </div>
-            <small class="hint">Нужен PAT со scope <code>gist</code>. Для MVP данные входа хранятся в localStorage этого браузера.</small>
+            <small class="hint">Нужен PAT со scope <code>gist</code>.</small>
           </label>
+
+          <label class="toggle-row">
+            <input id="persistTokenCheckbox" name="persistToken" type="checkbox" />
+            <span>Хранить токен на этом устройстве (localStorage)</span>
+          </label>
+          <p class="sub-meta">Если выключено — токен только для текущей сессии. После перезагрузки его нужно ввести заново.</p>
 
           <button id="connectSyncBtn" type="submit" class="btn-primary">Подключить</button>
         </form>
 
         <p id="syncFormError" class="error-text hidden"></p>
+      </div>
+    </div>
+
+    <div id="conflictModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="conflictModalTitle">
+      <div class="modal-content panel">
+        <div class="panel-title-row">
+          <h2 id="conflictModalTitle">Обнаружен конфликт данных</h2>
+          <button id="closeConflictModalBtn" type="button" class="btn-ghost">✕</button>
+        </div>
+
+        <p class="sub-meta">В облаке версия новее, а локально есть изменения. Выберите, какую версию считать основной.</p>
+        <p id="conflictCloudMeta" class="sub-meta"></p>
+        <p id="conflictLocalMeta" class="sub-meta"></p>
+
+        <div class="sync-actions">
+          <button id="useCloudBtn" type="button" class="btn-primary">Использовать облако (перезаписать локально)</button>
+          <button id="useLocalBtn" type="button" class="btn-secondary">Сохранить локальное в облако</button>
+          <button id="cancelConflictBtn" type="button" class="btn-danger">Отмена</button>
+        </div>
       </div>
     </div>
 

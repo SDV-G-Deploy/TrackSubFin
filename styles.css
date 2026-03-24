@@ -270,6 +270,20 @@ button:disabled {
   line-height: 1.4;
 }
 
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text);
+}
+
+.toggle-row input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  padding: 0;
+}
+
 .error-text {
   margin: 8px 0 0;
   color: #fecaca;
