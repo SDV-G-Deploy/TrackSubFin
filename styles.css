@@ -30,6 +30,13 @@ body {
   gap: 14px;
 }
 
+.app-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+
 .app-header h1 {
   margin: 0;
   font-size: 1.7rem;
@@ -63,6 +70,33 @@ body {
   font-weight: 600;
 }
 
+.sync-badge {
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(147, 170, 224, 0.28);
+  font-size: 0.85rem;
+}
+
+.sync-badge.ok {
+  border-color: rgba(52, 211, 153, 0.5);
+  color: #86efac;
+}
+
+.sync-badge.warn {
+  border-color: rgba(245, 158, 11, 0.7);
+  color: #fcd34d;
+}
+
+.sync-badge.muted {
+  color: var(--muted);
+}
+
+.sync-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: 1fr;
@@ -87,11 +121,30 @@ button {
   padding: 10px 12px;
 }
 
+button:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
 .btn-primary {
   cursor: pointer;
   background: linear-gradient(180deg, #5f8cff 0%, #4f73d1 100%);
   border: none;
   font-weight: 600;
+}
+
+.btn-secondary {
+  cursor: pointer;
+  background: rgba(95, 140, 255, 0.16);
+  border: 1px solid rgba(95, 140, 255, 0.42);
+  color: #dbe7ff;
+}
+
+.btn-ghost {
+  cursor: pointer;
+  background: transparent;
+  border: 1px solid rgba(147, 170, 224, 0.28);
+  padding: 5px 10px;
 }
 
 .btn-danger {
@@ -187,6 +240,39 @@ button {
   margin: 0 0 8px;
   text-align: right;
   font-weight: 700;
+}
+
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(3, 8, 20, 0.74);
+  display: grid;
+  place-items: center;
+  padding: 12px;
+  z-index: 99;
+}
+
+.modal-content {
+  width: min(560px, 100%);
+}
+
+.token-row {
+  display: flex;
+  gap: 8px;
+}
+
+.token-row input {
+  flex: 1;
+}
+
+.hint {
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.error-text {
+  margin: 8px 0 0;
+  color: #fecaca;
 }
 
 @media (min-width: 720px) {
