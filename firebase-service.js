@@ -15,12 +15,13 @@ import {
   getDoc,
   getFirestore,
   onSnapshot,
+  increment,
   orderBy,
   query,
-  runTransaction,
   serverTimestamp,
   setDoc,
   updateDoc,
+  writeBatch,
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
 export function hasFirebaseConfig() {
@@ -105,83 +106,119 @@ export async function createInvite(familyCode, user, inviteCode, maxUses = 1, tt
   return { inviteCode, expiresAt };
 }
 
-export async function bootstrapSpaceOwner(familyCode, user) {
-  await runTransaction(db, async (transaction) => {
-    const memberRef = membersDoc(familyCode, user.uid);
-    const ownerRef = accessDoc(familyCode);
-
-    const [memberSnap, ownerSnap] = await Promise.all([transaction.get(memberRef), transaction.get(ownerRef)]);
-
-    if (!ownerSnap.exists()) {
-      transaction.set(ownerRef, {
-        ownerUid: user.uid,
-        createdAt: serverTimestamp(),
-      });
-    }
-
-    if (!memberSnap.exists()) {
-      transaction.set(memberRef, {
-        uid: user.uid,
-        email: user.email || null,
-        name: user.displayName || null,
-        inviteCode: "OWNER_BOOTSTRAP",
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-    }
-  });
+function toAppError(error, fallback = "UNKNOWN") {
+  const err = new Error(fallback);
+  err.code = error?.code || null;
+  err.cause = error || null;
+  return err;
 }
 
-export async function consumeInviteAndJoinFamily(familyCode, inviteCode, user) {
-  await runTransaction(db, async (transaction) => {
-    const memberRef = membersDoc(familyCode, user.uid);
-    const inviteRef = invitesDoc(familyCode, inviteCode);
+function isFirestoreCode(error, code) {
+  return error?.code === code;
+}
 
-    const [memberSnap, inviteSnap] = await Promise.all([
-      transaction.get(memberRef),
-      transaction.get(inviteRef),
-    ]);
+export async function bootstrapSpaceOwner(familyCode, user) {
+  const memberRef = membersDoc(familyCode, user.uid);
+  const ownerRef = accessDoc(familyCode);
 
-    if (memberSnap.exists()) {
-      transaction.update(memberRef, {
-        email: user.email || null,
-        name: user.displayName || null,
-        updatedAt: serverTimestamp(),
-      });
-      return;
+  try {
+    await updateDoc(memberRef, {
+      email: user.email || null,
+      name: user.displayName || null,
+      updatedAt: serverTimestamp(),
+    });
+    return;
+  } catch (error) {
+    if (!isFirestoreCode(error, "not-found") && !isFirestoreCode(error, "permission-denied")) {
+      throw toAppError(error, "BOOTSTRAP_MEMBER_UPDATE_FAILED");
     }
+  }
 
-    if (!inviteSnap.exists()) {
-      throw new Error("INVITE_NOT_FOUND");
+  try {
+    await setDoc(ownerRef, {
+      ownerUid: user.uid,
+      createdAt: serverTimestamp(),
+    });
+  } catch (error) {
+    if (!isFirestoreCode(error, "permission-denied") && !isFirestoreCode(error, "already-exists")) {
+      throw toAppError(error, "BOOTSTRAP_OWNER_CREATE_FAILED");
     }
+  }
 
-    const invite = inviteSnap.data();
-    const expiresAtMs = invite.expiresAt?.toMillis?.() ?? null;
-    if (!expiresAtMs || expiresAtMs <= Date.now()) {
-      throw new Error("INVITE_EXPIRED");
-    }
-
-    const maxUses = Number(invite.maxUses || 1);
-    const usedCount = Number(invite.usedCount || 0);
-    if (usedCount >= maxUses) {
-      throw new Error("INVITE_LIMIT");
-    }
-
-    transaction.set(memberRef, {
+  try {
+    await setDoc(memberRef, {
       uid: user.uid,
       email: user.email || null,
       name: user.displayName || null,
-      inviteCode,
+      inviteCode: "OWNER_BOOTSTRAP",
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
+  } catch (error) {
+    if (isFirestoreCode(error, "permission-denied") || isFirestoreCode(error, "failed-precondition")) {
+      throw toAppError(error, "BOOTSTRAP_NOT_ALLOWED");
+    }
+    throw toAppError(error, "BOOTSTRAP_MEMBER_CREATE_FAILED");
+  }
+}
 
-    transaction.update(inviteRef, {
-      usedCount: usedCount + 1,
-      usedBy: user.uid,
-      usedAt: serverTimestamp(),
+export async function consumeInviteAndJoinFamily(familyCode, inviteCode, user) {
+  const memberRef = membersDoc(familyCode, user.uid);
+  const inviteRef = invitesDoc(familyCode, inviteCode);
+
+  try {
+    await updateDoc(memberRef, {
+      email: user.email || null,
+      name: user.displayName || null,
+      updatedAt: serverTimestamp(),
     });
+    return;
+  } catch (error) {
+    if (!isFirestoreCode(error, "not-found") && !isFirestoreCode(error, "permission-denied")) {
+      throw toAppError(error, "JOIN_MEMBER_UPDATE_FAILED");
+    }
+  }
+
+  const inviteSnap = await getDoc(inviteRef);
+  if (!inviteSnap.exists()) {
+    throw new Error("INVITE_NOT_FOUND");
+  }
+
+  const invite = inviteSnap.data();
+  const expiresAtMs = invite.expiresAt?.toMillis?.() ?? null;
+  if (!expiresAtMs || expiresAtMs <= Date.now()) {
+    throw new Error("INVITE_EXPIRED");
+  }
+
+  const maxUses = Number(invite.maxUses || 1);
+  const usedCount = Number(invite.usedCount || 0);
+  if (usedCount >= maxUses) {
+    throw new Error("INVITE_LIMIT");
+  }
+
+  const batch = writeBatch(db);
+  batch.set(memberRef, {
+    uid: user.uid,
+    email: user.email || null,
+    name: user.displayName || null,
+    inviteCode,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
   });
+  batch.update(inviteRef, {
+    usedCount: increment(1),
+    usedBy: user.uid,
+    usedAt: serverTimestamp(),
+  });
+
+  try {
+    await batch.commit();
+  } catch (error) {
+    if (isFirestoreCode(error, "permission-denied") || isFirestoreCode(error, "failed-precondition")) {
+      throw toAppError(error, "INVITE_RACE_OR_INVALID");
+    }
+    throw toAppError(error, "JOIN_COMMIT_FAILED");
+  }
 }
 
 export async function touchMembership(familyCode, user) {

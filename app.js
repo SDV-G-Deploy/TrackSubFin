@@ -5,7 +5,6 @@ import {
   createSubscription,
   hasFirebaseConfig,
   initFirebase,
-  isFamilyMember,
   loginWithGoogle,
   logout,
   removeSubscription,
@@ -19,6 +18,32 @@ const FAMILY_CODE_KEY = "tracksubfin.familyCode.v2";
 const FAMILY_CODE_RE = /^[A-Za-z0-9]{4,12}$/;
 const INVITE_CODE_RE = /^[A-Za-z0-9]{10,14}$/;
 const ALLOWED_FREQUENCIES = new Set(["monthly", "yearly", "custom-days"]);
+
+function describeFirebaseError(error) {
+  const appMessage = error?.message || "";
+  const code = error?.code || "";
+
+  if (appMessage === "INVITE_NOT_FOUND") return "Инвайт не найден. Проверьте код.";
+  if (appMessage === "INVITE_EXPIRED") return "Инвайт просрочен. Попросите новый.";
+  if (appMessage === "INVITE_LIMIT") return "Лимит инвайта исчерпан. Попросите новый.";
+  if (appMessage === "BOOTSTRAP_NOT_ALLOWED") {
+    return "Это пространство уже занято. Для подключения нужен валидный инвайт.";
+  }
+  if (appMessage === "INVITE_RACE_OR_INVALID") {
+    return "Инвайт уже использован/истёк или недействителен. Попросите новый.";
+  }
+
+  if (code === "permission-denied") {
+    return "Недостаточно прав (permission-denied). Проверьте Firestore Rules и корректность инвайта.";
+  }
+  if (code === "failed-precondition") {
+    return "Операция не выполнена (failed-precondition). Обычно это конфликт правил или состояния данных.";
+  }
+  if (code === "unavailable") return "Firestore временно недоступен. Попробуйте ещё раз.";
+
+  return `Неизвестная ошибка${code ? ` (${code})` : ""}${appMessage ? `: ${appMessage}` : ""}.`;
+}
+
 
 const firebaseSetupNotice = document.getElementById("firebaseSetupNotice");
 const form = document.getElementById("subscriptionForm");
@@ -379,45 +404,32 @@ async function connectToSpace(rawFamilyCode, rawInviteCode) {
     return false;
   }
 
-  const alreadyMember = await isFamilyMember(familyCode, currentUser.uid);
-
-  if (!alreadyMember) {
+  try {
     if (!inviteCode) {
-      try {
-        await bootstrapSpaceOwner(familyCode, currentUser);
-      } catch {
-        alert("Для входа в существующее пространство нужен инвайт-код.");
-        return false;
-      }
+      await bootstrapSpaceOwner(familyCode, currentUser);
     } else {
       if (!INVITE_CODE_RE.test(inviteCode)) {
         alert("Для подключения нужен инвайт-код (10–14 символов).");
         return false;
       }
-
-      try {
-        await consumeInviteAndJoinFamily(familyCode, inviteCode, currentUser);
-      } catch (error) {
-        if (error?.message === "INVITE_NOT_FOUND") {
-          alert("Инвайт не найден. Проверьте код.");
-        } else if (error?.message === "INVITE_EXPIRED") {
-          alert("Инвайт просрочен. Попросите новый.");
-        } else if (error?.message === "INVITE_LIMIT") {
-          alert("Лимит инвайта исчерпан. Попросите новый.");
-        } else {
-          alert("Не удалось подключиться. Проверьте правила Firestore и интернет.");
-        }
-        return false;
-      }
+      await consumeInviteAndJoinFamily(familyCode, inviteCode, currentUser);
     }
+  } catch (error) {
+    alert(describeFirebaseError(error));
+    return false;
   }
 
   currentFamilyCode = familyCode;
   localStorage.setItem(FAMILY_CODE_KEY, familyCode);
   familyCodeInput.value = familyCode;
 
-  await startRealtimeForFamilyCode(familyCode);
-  return true;
+  try {
+    await startRealtimeForFamilyCode(familyCode);
+    return true;
+  } catch (error) {
+    alert(describeFirebaseError(error));
+    return false;
+  }
 }
 
 function randomFamilyCode() {
@@ -489,8 +501,8 @@ createInviteBtn.addEventListener("click", async () => {
   try {
     await createInvite(currentFamilyCode, currentUser, inviteCode, 1, 72);
     showCreatedInvite(currentFamilyCode, inviteCode);
-  } catch {
-    alert("Не удалось создать инвайт. Проверьте права и интернет.");
+  } catch (error) {
+    alert(describeFirebaseError(error));
   } finally {
     createInviteBtn.disabled = false;
   }
@@ -537,8 +549,8 @@ form.addEventListener("submit", async (e) => {
     form.reset();
     customDaysField.classList.add("hidden");
     customDaysField.querySelector("input").required = false;
-  } catch {
-    alert("Не удалось сохранить подписку. Проверьте интернет и правила Firestore.");
+  } catch (error) {
+    alert(describeFirebaseError(error));
   } finally {
     addSubscriptionBtn.disabled = !currentUser || !currentFamilyCode;
   }
@@ -565,21 +577,14 @@ if (!hasFirebaseConfig()) {
 
       if (currentFamilyCode) {
         try {
-          const hasMembership = await isFamilyMember(currentFamilyCode, user.uid);
-          if (hasMembership) {
-            await startRealtimeForFamilyCode(currentFamilyCode);
-          } else {
-            stopRealtime();
-            clearSubscriptionsView();
-            setSpaceDisconnected();
-            spaceBadge.textContent = `Пространство: ${currentFamilyCode}`;
-            spaceBadge.className = "sync-badge warn";
-            spaceStatusText.textContent = "Нужен инвайт-код для входа в это пространство.";
-          }
-        } catch {
+          await startRealtimeForFamilyCode(currentFamilyCode);
+        } catch (error) {
           stopRealtime();
           clearSubscriptionsView();
           setSpaceDisconnected();
+          spaceBadge.textContent = `Пространство: ${currentFamilyCode}`;
+          spaceBadge.className = "sync-badge warn";
+          spaceStatusText.textContent = describeFirebaseError(error);
         }
       } else {
         setSpaceDisconnected();
