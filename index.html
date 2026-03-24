@@ -11,7 +11,7 @@
       <header class="app-header">
         <div>
           <h1>TrackSubFin</h1>
-          <p class="subtitle">Трекинг подписок и ближайших списаний</p>
+          <p class="subtitle">Простой список подписок для дома</p>
         </div>
         <button id="openSyncModalBtn" type="button" class="btn-secondary">Синхронизация</button>
       </header>
@@ -21,7 +21,7 @@
           <h2>Облако</h2>
           <span id="syncStateBadge" class="sync-badge muted">Не подключено</span>
         </div>
-        <p id="syncStatusText" class="sub-meta">Подключите GitHub Gist, чтобы видеть одни и те же данные на разных устройствах.</p>
+        <p id="syncStatusText" class="sub-meta">Один раз подключи на каждом устройстве — дальше всё синхронизируется автоматически.</p>
         <div class="sync-actions">
           <button id="syncNowBtn" class="btn-primary" type="button" disabled>Синхронизировать сейчас</button>
           <button id="disconnectSyncBtn" class="btn-danger" type="button" disabled>Отключить</button>
@@ -108,6 +108,8 @@
           <button id="closeSyncModalBtn" type="button" class="btn-ghost">✕</button>
         </div>
 
+        <p class="sub-meta">Один раз подключи на каждом устройстве — дальше всё синхронизируется автоматически.</p>
+
         <form id="syncConnectForm" class="form-grid">
           <label>
             Archive Code
@@ -124,7 +126,7 @@
           </label>
 
           <label>
-            GitHub Token (PAT)
+            GitHub Token
             <div class="token-row">
               <input
                 id="githubTokenInput"
@@ -136,38 +138,17 @@
               />
               <button id="toggleTokenBtn" type="button" class="btn-secondary">Показать</button>
             </div>
-            <small class="hint">Нужен PAT со scope <code>gist</code>.</small>
           </label>
 
           <label class="toggle-row">
-            <input id="persistTokenCheckbox" name="persistToken" type="checkbox" />
-            <span>Хранить токен на этом устройстве (localStorage)</span>
+            <input id="persistTokenCheckbox" name="persistToken" type="checkbox" checked />
+            <span>Запомнить на этом устройстве</span>
           </label>
-          <p class="sub-meta">Если выключено — токен только для текущей сессии. После перезагрузки его нужно ввести заново.</p>
 
           <button id="connectSyncBtn" type="submit" class="btn-primary">Подключить</button>
         </form>
 
         <p id="syncFormError" class="error-text hidden"></p>
-      </div>
-    </div>
-
-    <div id="conflictModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="conflictModalTitle">
-      <div class="modal-content panel">
-        <div class="panel-title-row">
-          <h2 id="conflictModalTitle">Обнаружен конфликт данных</h2>
-          <button id="closeConflictModalBtn" type="button" class="btn-ghost">✕</button>
-        </div>
-
-        <p class="sub-meta">В облаке версия новее, а локально есть изменения. Выберите, какую версию считать основной.</p>
-        <p id="conflictCloudMeta" class="sub-meta"></p>
-        <p id="conflictLocalMeta" class="sub-meta"></p>
-
-        <div class="sync-actions">
-          <button id="useCloudBtn" type="button" class="btn-primary">Использовать облако (перезаписать локально)</button>
-          <button id="useLocalBtn" type="button" class="btn-secondary">Сохранить локальное в облако</button>
-          <button id="cancelConflictBtn" type="button" class="btn-danger">Отмена</button>
-        </div>
       </div>
     </div>
 

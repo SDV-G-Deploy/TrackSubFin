@@ -25,13 +25,6 @@ const disconnectSyncBtn = document.getElementById("disconnectSyncBtn");
 const syncStateBadge = document.getElementById("syncStateBadge");
 const syncStatusText = document.getElementById("syncStatusText");
 
-const conflictModal = document.getElementById("conflictModal");
-const closeConflictModalBtn = document.getElementById("closeConflictModalBtn");
-const conflictCloudMeta = document.getElementById("conflictCloudMeta");
-const conflictLocalMeta = document.getElementById("conflictLocalMeta");
-const useCloudBtn = document.getElementById("useCloudBtn");
-const useLocalBtn = document.getElementById("useLocalBtn");
-const cancelConflictBtn = document.getElementById("cancelConflictBtn");
 
 /** @type {Array<any>} */
 let subscriptions = [];
@@ -39,6 +32,9 @@ let localMeta = { updatedAt: new Date(0).toISOString(), revision: "", version: 1
 let syncConfig = loadSyncConfig();
 let runtimeToken = syncConfig?.persistToken ? syncConfig?.token || "" : "";
 let autosaveTimeout = null;
+let autoPullInterval = null;
+const AUTOSAVE_DEBOUNCE_MS = 700;
+const AUTO_PULL_INTERVAL_MS = 25000;
 
 hydrateLocalState();
 
@@ -187,11 +183,6 @@ function syncPayload() {
   };
 }
 
-function localHasUnsyncedChanges() {
-  if (!syncConfig?.lastSyncedRevision) return subscriptions.length > 0;
-  return localMeta.revision !== syncConfig.lastSyncedRevision;
-}
-
 function hasSessionTokenOnly() {
   return Boolean(syncConfig?.gistId) && !syncConfig?.persistToken;
 }
@@ -286,7 +277,7 @@ async function loadFullGist(gistId, token) {
   return response.json();
 }
 
-async function pushToCloud(statusText = "Синхронизация выполнена") {
+async function pushToCloud() {
   if (!syncConfig?.gistId || !runtimeToken) return;
 
   const response = await githubFetch(
@@ -306,11 +297,40 @@ async function pushToCloud(statusText = "Синхронизация выполн
 
   await response.json();
   syncConfig.lastSyncAt = new Date().toISOString();
-  syncConfig.lastSyncStatus = statusText;
+  syncConfig.lastSyncStatus = "ok";
   syncConfig.lastSyncedRevision = localMeta.revision;
   syncConfig.lastKnownCloudUpdatedAt = localMeta.updatedAt;
   saveSyncConfig();
   renderSyncState();
+}
+
+async function pullFromCloud({ quiet = false } = {}) {
+  if (!syncConfig?.gistId || !runtimeToken) return;
+
+  try {
+    const gist = await loadFullGist(syncConfig.gistId, runtimeToken);
+    const cloudPayload = parseGistPayload(gist);
+
+    if (cloudPayload.revision !== localMeta.revision) {
+      applyCloudPayload(cloudPayload);
+      render();
+    }
+
+    syncConfig.lastSyncAt = new Date().toISOString();
+    syncConfig.lastSyncStatus = "ok";
+    syncConfig.lastSyncedRevision = localMeta.revision;
+    syncConfig.lastKnownCloudUpdatedAt = localMeta.updatedAt;
+    saveSyncConfig();
+    renderSyncState();
+  } catch (err) {
+    syncConfig.lastSyncStatus = "offline";
+    saveSyncConfig();
+    if (!quiet) {
+      renderSyncState();
+    } else {
+      syncStatusText.textContent = "Нет связи, повторим автоматически";
+    }
+  }
 }
 
 function scheduleAutosave() {
@@ -319,13 +339,26 @@ function scheduleAutosave() {
 
   autosaveTimeout = setTimeout(async () => {
     try {
-      await pushToCloud("Автосинхронизация выполнена");
-    } catch (err) {
-      syncConfig.lastSyncStatus = `Ошибка автосинхронизации: ${err.message}`;
+      await pushToCloud();
+    } catch {
+      syncConfig.lastSyncStatus = "offline";
       saveSyncConfig();
-      renderSyncState();
+      syncStatusText.textContent = "Нет связи, повторим автоматически";
     }
-  }, 900);
+  }, AUTOSAVE_DEBOUNCE_MS);
+}
+
+function startAutoPull() {
+  if (autoPullInterval) {
+    clearInterval(autoPullInterval);
+    autoPullInterval = null;
+  }
+
+  if (!syncConfig?.gistId || !runtimeToken) return;
+
+  autoPullInterval = setInterval(() => {
+    pullFromCloud({ quiet: true });
+  }, AUTO_PULL_INTERVAL_MS);
 }
 
 function daysUntil(dateStr) {
@@ -440,11 +473,15 @@ function renderTotal(items) {
   totalMonthlyEl.textContent = `${fmtCurrency(sum)} / мес`;
 }
 
+function formatTime(isoString) {
+  return new Date(isoString).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+}
+
 function renderSyncState() {
   if (!syncConfig?.gistId) {
     syncStateBadge.textContent = "Не подключено";
     syncStateBadge.className = "sync-badge muted";
-    syncStatusText.textContent = "Подключите GitHub Gist, чтобы видеть одни и те же данные на разных устройствах.";
+    syncStatusText.textContent = "Один раз подключи на каждом устройстве — дальше всё синхронизируется автоматически.";
     syncNowBtn.disabled = true;
     disconnectSyncBtn.disabled = true;
     return;
@@ -453,20 +490,22 @@ function renderSyncState() {
   if (hasSessionTokenOnly() && !runtimeToken) {
     syncStateBadge.textContent = `Подключено: ${syncConfig.archiveCode}`;
     syncStateBadge.className = "sync-badge warn";
-    syncStatusText.textContent = "Требуется токен для синхронизации после перезагрузки.";
+    syncStatusText.textContent = "Нужен токен, чтобы продолжить синхронизацию на этом устройстве.";
     syncNowBtn.disabled = true;
     disconnectSyncBtn.disabled = false;
     return;
   }
 
   syncStateBadge.textContent = `Подключено: ${syncConfig.archiveCode}`;
-  syncStateBadge.className = hasSessionTokenOnly() ? "sync-badge warn" : "sync-badge ok";
+  syncStateBadge.className = "sync-badge ok";
 
-  const tokenMode = hasSessionTokenOnly() ? " Токен: только текущая сессия." : " Токен хранится локально.";
-  const syncAt = syncConfig.lastSyncAt
-    ? ` Последняя синхра: ${new Date(syncConfig.lastSyncAt).toLocaleString("ru-RU")}.`
-    : "";
-  syncStatusText.textContent = `${syncConfig.lastSyncStatus || "Готово"}.${tokenMode}${syncAt}`;
+  if (syncConfig.lastSyncStatus === "offline") {
+    syncStatusText.textContent = "Нет связи, повторим автоматически";
+  } else if (syncConfig.lastSyncAt) {
+    syncStatusText.textContent = `Синхронизировано: ${formatTime(syncConfig.lastSyncAt)}`;
+  } else {
+    syncStatusText.textContent = "Синхронизация включена";
+  }
 
   syncNowBtn.disabled = !runtimeToken;
   disconnectSyncBtn.disabled = false;
@@ -498,56 +537,10 @@ function closeModal() {
   clearSyncError();
 }
 
-function openConflictModal(localPayload, cloudPayload) {
-  return new Promise((resolve) => {
-    const cloudDate = new Date(cloudPayload.updatedAt).toLocaleString("ru-RU");
-    const localDate = new Date(localPayload.updatedAt).toLocaleString("ru-RU");
-
-    conflictCloudMeta.textContent = `Облако: ${cloudDate}, ревизия ${cloudPayload.revision}`;
-    conflictLocalMeta.textContent = `Локально: ${localDate}, ревизия ${localPayload.revision}`;
-
-    const cleanup = () => {
-      conflictModal.classList.add("hidden");
-      useCloudBtn.removeEventListener("click", onCloud);
-      useLocalBtn.removeEventListener("click", onLocal);
-      cancelConflictBtn.removeEventListener("click", onCancel);
-      closeConflictModalBtn.removeEventListener("click", onCancel);
-      conflictModal.removeEventListener("click", onBackdrop);
-    };
-
-    const onCloud = () => {
-      cleanup();
-      resolve("cloud");
-    };
-
-    const onLocal = () => {
-      cleanup();
-      resolve("local");
-    };
-
-    const onCancel = () => {
-      cleanup();
-      resolve("cancel");
-    };
-
-    const onBackdrop = (event) => {
-      if (event.target === conflictModal) onCancel();
-    };
-
-    useCloudBtn.addEventListener("click", onCloud);
-    useLocalBtn.addEventListener("click", onLocal);
-    cancelConflictBtn.addEventListener("click", onCancel);
-    closeConflictModalBtn.addEventListener("click", onCancel);
-    conflictModal.addEventListener("click", onBackdrop);
-
-    conflictModal.classList.remove("hidden");
-  });
-}
-
 openSyncModalBtn.addEventListener("click", () => {
   archiveCodeInput.value = syncConfig?.archiveCode || "";
   githubTokenInput.value = runtimeToken || "";
-  persistTokenCheckbox.checked = Boolean(syncConfig?.persistToken);
+  persistTokenCheckbox.checked = syncConfig ? Boolean(syncConfig?.persistToken) : true;
   githubTokenInput.type = "password";
   toggleTokenBtn.textContent = "Показать";
   openModal();
@@ -579,7 +572,7 @@ syncConnectForm.addEventListener("submit", async (event) => {
   const persistToken = persistTokenCheckbox.checked;
 
   if (!ARCHIVE_CODE_RE.test(archiveCode)) {
-    showSyncError("Archive Code: 6-24 символов, только латиница/цифры/дефис.");
+    showSyncError("Проверьте Archive Code (6-24 символов).");
     return;
   }
 
@@ -594,71 +587,35 @@ syncConnectForm.addEventListener("submit", async (event) => {
 
   try {
     let gist = await findGistByCode(archiveCode, token);
-    const gistExisted = Boolean(gist);
+
+    runtimeToken = token;
+    syncConfig = {
+      archiveCode,
+      gistId: null,
+      persistToken,
+      lastSyncAt: null,
+      lastSyncStatus: "ok",
+      lastSyncedRevision: null,
+      lastKnownCloudUpdatedAt: null,
+    };
 
     if (!gist) {
-      runtimeToken = token;
-      syncConfig = {
-        archiveCode,
-        gistId: null,
-        persistToken,
-        lastSyncAt: null,
-        lastSyncStatus: "Подключено. Создано новое облако.",
-        lastSyncedRevision: null,
-        lastKnownCloudUpdatedAt: null,
-      };
-
       gist = await createGist(archiveCode, token);
       syncConfig.gistId = gist.id;
       syncConfig.lastSyncAt = new Date().toISOString();
       syncConfig.lastSyncedRevision = localMeta.revision;
       syncConfig.lastKnownCloudUpdatedAt = localMeta.updatedAt;
       saveSyncConfig();
+      startAutoPull();
       render();
       closeModal();
       return;
     }
 
-    gist = await loadFullGist(gist.id, token);
-    const cloudPayload = parseGistPayload(gist);
-    const localPayload = syncPayload();
-
-    const cloudIsNewer = new Date(cloudPayload.updatedAt).getTime() > new Date(localPayload.updatedAt).getTime();
-    const localUnsynced = cloudPayload.revision !== localPayload.revision;
-
-    let conflictChoice = "cloud";
-    if (cloudIsNewer && localUnsynced) {
-      conflictChoice = await openConflictModal(localPayload, cloudPayload);
-      if (conflictChoice === "cancel") {
-        showSyncError("Подключение отменено: выберите вариант разрешения конфликта, когда будете готовы.");
-        return;
-      }
-    }
-
-    runtimeToken = token;
-    syncConfig = {
-      archiveCode,
-      gistId: gist.id,
-      persistToken,
-      lastSyncAt: new Date().toISOString(),
-      lastSyncStatus: gistExisted ? "Подключено." : "Подключено. Создано новое облако.",
-      lastSyncedRevision: null,
-      lastKnownCloudUpdatedAt: null,
-    };
-
-    if (conflictChoice === "cloud") {
-      applyCloudPayload(cloudPayload);
-      syncConfig.lastSyncStatus = "Подключено. Использована версия из облака.";
-      syncConfig.lastSyncedRevision = localMeta.revision;
-      syncConfig.lastKnownCloudUpdatedAt = localMeta.updatedAt;
-      saveSyncConfig();
-      render();
-      closeModal();
-      return;
-    }
-
-    await pushToCloud("Подключено. Локальная версия отправлена в облако.");
+    syncConfig.gistId = gist.id;
     saveSyncConfig();
+    await pullFromCloud();
+    startAutoPull();
     render();
     closeModal();
   } catch (err) {
@@ -681,37 +638,10 @@ syncNowBtn.addEventListener("click", async () => {
   syncNowBtn.disabled = true;
   syncNowBtn.textContent = "Синхронизация...";
   try {
-    const gist = await loadFullGist(syncConfig.gistId, runtimeToken);
-    const cloudPayload = parseGistPayload(gist);
-    const localPayload = syncPayload();
-
-    const cloudIsNewer = new Date(cloudPayload.updatedAt).getTime() > new Date(localPayload.updatedAt).getTime();
-    const localUnsynced = localHasUnsyncedChanges() && cloudPayload.revision !== localPayload.revision;
-
-    if (cloudIsNewer && localUnsynced) {
-      const choice = await openConflictModal(localPayload, cloudPayload);
-      if (choice === "cancel") {
-        syncConfig.lastSyncStatus = "Ручная синхронизация отменена пользователем.";
-        saveSyncConfig();
-        renderSyncState();
-        return;
-      }
-
-      if (choice === "cloud") {
-        applyCloudPayload(cloudPayload);
-        syncConfig.lastSyncAt = new Date().toISOString();
-        syncConfig.lastSyncStatus = "Ручная синхронизация: применена версия из облака.";
-        syncConfig.lastSyncedRevision = localMeta.revision;
-        syncConfig.lastKnownCloudUpdatedAt = localMeta.updatedAt;
-        saveSyncConfig();
-        render();
-        return;
-      }
-    }
-
-    await pushToCloud("Ручная синхронизация выполнена");
-  } catch (err) {
-    syncConfig.lastSyncStatus = `Ошибка ручной синхры: ${err.message}`;
+    await pullFromCloud();
+    await pushToCloud();
+  } catch {
+    syncConfig.lastSyncStatus = "offline";
     saveSyncConfig();
     renderSyncState();
   } finally {
@@ -723,6 +653,10 @@ syncNowBtn.addEventListener("click", async () => {
 disconnectSyncBtn.addEventListener("click", () => {
   syncConfig = null;
   runtimeToken = "";
+  if (autoPullInterval) {
+    clearInterval(autoPullInterval);
+    autoPullInterval = null;
+  }
   saveSyncConfig();
   renderSyncState();
 });
@@ -757,3 +691,8 @@ form.addEventListener("submit", (e) => {
 });
 
 render();
+
+if (syncConfig?.gistId && runtimeToken) {
+  pullFromCloud({ quiet: true });
+  startAutoPull();
+}
