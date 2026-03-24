@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TrackSubFin</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header class="app-header">
+        <div>
+          <h1>TrackSubFin</h1>
+          <p class="subtitle">Трекинг подписок и ближайших списаний</p>
+        </div>
+      </header>
+
+      <section class="panel form-panel">
+        <h2>Новая подписка</h2>
+        <form id="subscriptionForm" class="form-grid">
+          <label>
+            Название продукта
+            <input required name="name" type="text" placeholder="YouTube Premium" />
+          </label>
+
+          <label>
+            Цена
+            <input required name="price" type="number" min="0" step="0.01" placeholder="9.99" />
+          </label>
+
+          <label>
+            Периодичность
+            <select name="frequency" id="frequency" required>
+              <option value="monthly">Ежемесячно</option>
+              <option value="yearly">Ежегодно</option>
+              <option value="custom-days">Каждые N дней</option>
+            </select>
+          </label>
+
+          <label id="customDaysField" class="hidden">
+            Количество дней
+            <input name="customDays" type="number" min="1" step="1" placeholder="45" />
+          </label>
+
+          <label>
+            Следующее списание
+            <input required name="nextChargeDate" type="date" />
+          </label>
+
+          <label>
+            Карта (название)
+            <input required name="cardName" type="text" placeholder="Monobank Black" />
+          </label>
+
+          <label>
+            Последние 4 цифры
+            <input
+              required
+              name="cardLast4"
+              type="text"
+              inputmode="numeric"
+              pattern="\d{4}"
+              maxlength="4"
+              placeholder="1234"
+            />
+          </label>
+
+          <label>
+            Дата окончания (опционально)
+            <input name="endDate" type="date" />
+          </label>
+
+          <button type="submit" class="btn-primary">Добавить подписку</button>
+        </form>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title-row">
+          <h2>Ближайшие списания</h2>
+          <span id="totalMonthly" class="total-pill">$0.00 / мес</span>
+        </div>
+        <div id="timeline" class="timeline"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Список подписок</h2>
+        <div id="subscriptionsList" class="subscriptions-list"></div>
+      </section>
+    </main>
+
+    <template id="subscriptionCardTemplate">
+      <article class="sub-card">
+        <div class="sub-main">
+          <h3 class="sub-name"></h3>
+          <p class="sub-meta"></p>
+          <p class="sub-dates"></p>
+        </div>
+        <div class="sub-side">
+          <p class="sub-price"></p>
+          <button class="btn-danger" type="button">Удалить</button>
+        </div>
+      </article>
+    </template>
+
+    <script src="app.js"></script>
+  </body>
+</html>
