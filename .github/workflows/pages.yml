@@ -24,13 +24,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Prepare publish dir
+        run: |
+          rm -rf publish
+          mkdir -p publish
+          cp index.html styles.css app.js firebase-service.js firebase-config.js publish/
+          if [ -d assets ]; then cp -R assets publish/assets; fi
+
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: .
+          path: publish
 
       - name: Deploy to GitHub Pages
         id: deployment

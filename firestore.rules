@@ -1,0 +1,118 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isMember(familyCode) {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/spaces/$(familyCode)/members/$(request.auth.uid));
+    }
+
+    function hasOnlyAllowedKeys(data) {
+      return data.keys().hasOnly([
+        'name',
+        'price',
+        'frequency',
+        'customDays',
+        'nextChargeDate',
+        'cardName',
+        'cardLast4',
+        'endDate',
+        'createdAt',
+        'createdBy'
+      ]);
+    }
+
+    function hasRequiredSubscriptionKeys(data) {
+      return data.keys().hasAll([
+        'name',
+        'price',
+        'frequency',
+        'nextChargeDate',
+        'cardName',
+        'cardLast4',
+        'createdAt',
+        'createdBy'
+      ]);
+    }
+
+    function validCreatedBy(data) {
+      return data.createdBy is map
+        && data.createdBy.uid == request.auth.uid
+        && data.createdBy.keys().hasOnly(['uid', 'email', 'name'])
+        && data.createdBy.uid is string
+        && (data.createdBy.email == null || data.createdBy.email is string)
+        && (data.createdBy.name == null || data.createdBy.name is string);
+    }
+
+    function validBaseSubscription(data) {
+      return hasOnlyAllowedKeys(data)
+        && hasRequiredSubscriptionKeys(data)
+        && data.name is string
+        && data.name.size() >= 1
+        && data.name.size() <= 120
+        && data.price is number
+        && data.price >= 0
+        && data.cardName is string
+        && data.cardName.size() >= 1
+        && data.cardName.size() <= 120
+        && data.cardLast4 is string
+        && data.cardLast4.matches('^[0-9]{4}$')
+        && data.nextChargeDate is string
+        && data.nextChargeDate.matches('^\\d{4}-\\d{2}-\\d{2}$')
+        && data.createdAt is timestamp
+        && validCreatedBy(data);
+    }
+
+    function validFrequencyFields(data) {
+      return (
+        data.frequency == 'monthly' || data.frequency == 'yearly'
+      )
+      ? !('customDays' in data)
+      : (
+        data.frequency == 'custom-days'
+        && ('customDays' in data)
+        && data.customDays is int
+        && data.customDays >= 1
+      );
+    }
+
+    function validEndDate(data) {
+      return !('endDate' in data)
+        || data.endDate == null
+        || (
+          data.endDate is string
+          && data.endDate.matches('^\\d{4}-\\d{2}-\\d{2}$')
+          && data.endDate >= data.nextChargeDate
+        );
+    }
+
+    match /spaces/{familyCode} {
+      allow read, write: if false;
+
+      match /members/{uid} {
+        allow read: if isMember(familyCode);
+        allow create, update: if isSignedIn() && uid == request.auth.uid;
+        allow delete: if false;
+      }
+
+      match /subscriptions/{subscriptionId} {
+        allow read: if isMember(familyCode);
+        allow create: if isMember(familyCode)
+          && validBaseSubscription(request.resource.data)
+          && validFrequencyFields(request.resource.data)
+          && validEndDate(request.resource.data);
+
+        allow update: if isMember(familyCode)
+          && validBaseSubscription(request.resource.data)
+          && validFrequencyFields(request.resource.data)
+          && validEndDate(request.resource.data)
+          && request.resource.data.createdBy.uid == resource.data.createdBy.uid;
+
+        allow delete: if isMember(familyCode);
+      }
+    }
+  }
+}

@@ -9,7 +9,7 @@
 
 ---
 
-## Быстрый запуск Firebase (MVP)
+## Быстрый запуск Firebase
 
 ### 1) Создай проект в Firebase Console
 1. Открой [Firebase Console](https://console.firebase.google.com/)
@@ -28,7 +28,7 @@
 
 ### 4) Создай Firestore
 1. **Firestore Database → Create database**
-2. Режим: **Start in test mode** (для MVP)
+2. Режим: любой (рекомендуется production mode)
 3. Выбери ближайший регион
 
 ### 5) Заполни config
@@ -39,50 +39,61 @@
 
 ---
 
-## Как подключить два устройства (код пары)
+## Модель доступа (membership)
 
-1. На обоих устройствах открой приложение.
-2. Нажми **Войти через Google**.
-3. На первом устройстве нажми **Создать код** (или введи свой).
-4. На втором устройстве введи тот же код и нажми **Подключить**.
-5. Готово — подписки общие и обновляются в реальном времени.
+Структура данных:
+- `spaces/{familyCode}/members/{uid}` — участники пространства (кто имеет доступ)
+- `spaces/{familyCode}/subscriptions/{id}` — подписки
 
-Данные хранятся в коллекции:
-`spaces/{familyCode}/subscriptions/{id}`
-
----
-
-## Что уже реализовано
-
-- Google Sign-In popup
-- Кнопки Войти/Выйти
-- Показ имени/email/аватара
-- Shared space по `familyCode`
-- Realtime синк через Firestore `onSnapshot`
-- CRUD подписок напрямую в Firestore
-- Локальный cache как fallback для offline preview
-- Сохранены текущие UX-фичи:
-  - карточки подписок,
-  - timeline,
-  - цветовые статусы (<=3 красный, 4-7 янтарный),
-  - monthly total normalization.
+Как это работает:
+1. Пользователь входит через Google.
+2. Вводит/создаёт `familyCode`.
+3. Приложение автоматически (idempotent) записывает membership-документ
+   `spaces/{familyCode}/members/{uid}`.
+4. После этого разрешены чтение/запись подписок в этом `familyCode`.
 
 ---
 
-## Безопасность (что усилить после MVP)
+## Firestore Rules deployment
 
-Сейчас для скорости используется test mode. Перед продом обязательно:
-1. Ограничить Firestore Rules только авторизованным пользователям.
-2. Добавить проверку доступа к конкретному `familyCode` (membership).
-3. Ограничить запись/удаление (валидировать поля и типы).
-4. При желании: сделать отдельную коллекцию участников пространства.
+В репозитории есть:
+- `firestore.rules`
+- `firebase.json`
+
+Деплой правил (один раз настроить CLI, далее по мере изменений):
+
+```bash
+npm i -g firebase-tools
+firebase login
+firebase use <YOUR_FIREBASE_PROJECT_ID>
+firebase deploy --only firestore:rules
+```
+
+Проверка:
+```bash
+firebase firestore:rules:get
+```
 
 ---
 
-## Локальный запуск
+## Локальный запуск (важно: через HTTP)
 
-Достаточно открыть `index.html` в браузере.
+`file://`-открытие `index.html` для Firebase Auth не подходит.
+
+Запускай через локальный HTTP-сервер, например:
+
+```bash
+cd TrackSubFin
+python3 -m http.server 8080
+# или
+npx serve -l 8080
+```
+
+Открой `http://localhost:8080`.
+
+---
 
 ## Deploy
 
 При push в `main` GitHub Actions автоматически публикует сайт на GitHub Pages (`.github/workflows/pages.yml`).
+Workflow публикует только runtime-файлы (`index.html`, `styles.css`, `app.js`, `firebase-service.js`, `firebase-config.js`, `assets/` если есть).

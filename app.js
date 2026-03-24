@@ -1,5 +1,6 @@
 import {
   createSubscription,
+  ensureFamilyMembership,
   hasFirebaseConfig,
   initFirebase,
   loginWithGoogle,
@@ -11,7 +12,9 @@ import {
 
 const CACHE_KEY = "tracksubfin.cache.v2";
 const FAMILY_CODE_KEY = "tracksubfin.familyCode.v1";
+const FAMILY_META_KEY = "tracksubfin.familyMeta.v1";
 const FAMILY_CODE_RE = /^[A-Za-z0-9]{4,12}$/;
+const ALLOWED_FREQUENCIES = new Set(["monthly", "yearly", "custom-days"]);
 
 const firebaseSetupNotice = document.getElementById("firebaseSetupNotice");
 const form = document.getElementById("subscriptionForm");
@@ -44,10 +47,58 @@ let subscriptions = loadCachedSubscriptions();
 let stopSubscriptionsWatcher = null;
 let firebaseReady = false;
 
+function parseIsoDateOrNull(value) {
+  const str = String(value || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(str)) return null;
+  const date = new Date(`${str}T00:00:00Z`);
+  return Number.isNaN(date.getTime()) ? null : str;
+}
+
+function normalizeSubscription(raw) {
+  if (!raw || typeof raw !== "object") return null;
+
+  const name = String(raw.name || "").trim();
+  const cardName = String(raw.cardName || "").trim();
+  const cardLast4 = String(raw.cardLast4 || "").trim();
+  const frequency = String(raw.frequency || "").trim();
+  const price = Number(raw.price);
+  const nextChargeDate = parseIsoDateOrNull(raw.nextChargeDate);
+  const endDate = raw.endDate ? parseIsoDateOrNull(raw.endDate) : null;
+  const customDaysRaw = raw.customDays == null ? null : Number(raw.customDays);
+  const customDays = Number.isInteger(customDaysRaw) && customDaysRaw >= 1 ? customDaysRaw : null;
+
+  if (!name || !cardName || !/^\d{4}$/.test(cardLast4)) return null;
+  if (!ALLOWED_FREQUENCIES.has(frequency)) return null;
+  if (!Number.isFinite(price) || price < 0) return null;
+  if (!nextChargeDate) return null;
+
+  if (frequency === "custom-days" && customDays == null) return null;
+  if (frequency !== "custom-days" && customDays != null) return null;
+
+  if (endDate && endDate < nextChargeDate) return null;
+
+  return {
+    id: raw.id ? String(raw.id) : undefined,
+    name,
+    price,
+    frequency,
+    customDays,
+    nextChargeDate,
+    cardName,
+    cardLast4,
+    endDate,
+  };
+}
+
+function normalizeSubscriptions(rawItems) {
+  if (!Array.isArray(rawItems)) return [];
+  return rawItems.map(normalizeSubscription).filter(Boolean);
+}
+
 function loadCachedSubscriptions() {
   try {
     const parsed = JSON.parse(localStorage.getItem(CACHE_KEY) || "[]");
-    return Array.isArray(parsed) ? parsed : [];
+    return normalizeSubscriptions(parsed);
   } catch {
     return [];
   }
@@ -55,6 +106,18 @@ function loadCachedSubscriptions() {
 
 function saveCache() {
   localStorage.setItem(CACHE_KEY, JSON.stringify(subscriptions));
+}
+
+function clearSensitiveLocalState() {
+  localStorage.removeItem(CACHE_KEY);
+  localStorage.removeItem(FAMILY_CODE_KEY);
+  localStorage.removeItem(FAMILY_META_KEY);
+  subscriptions = [];
+  currentFamilyCode = "";
+  familyCodeInput.value = "";
+  stopRealtime();
+  setSpaceDisconnected();
+  render();
 }
 
 function daysUntil(dateStr) {
@@ -135,7 +198,10 @@ function setSpaceConnected(familyCode) {
 function renderTimeline(items) {
   timelineEl.innerHTML = "";
   if (!items.length) {
-    timelineEl.innerHTML = '<p class="sub-meta">Подписок пока нет.</p>';
+    const emptyText = document.createElement("p");
+    emptyText.className = "sub-meta";
+    emptyText.textContent = "Подписок пока нет.";
+    timelineEl.appendChild(emptyText);
     return;
   }
 
@@ -147,12 +213,23 @@ function renderTimeline(items) {
       const status = statusByDays(days);
       const el = document.createElement("div");
       el.className = `timeline-item ${status === "normal" ? "" : status}`.trim();
-      el.innerHTML = `
-        <strong>${sub.name}</strong>
-        <p class="sub-meta">${fmtCurrency(sub.price)}</p>
-        <p class="sub-meta">${new Date(sub.nextChargeDate).toLocaleDateString("ru-RU")}</p>
-        <p class="sub-meta">Через: ${humanRemaining(days)}</p>
-      `;
+
+      const title = document.createElement("strong");
+      title.textContent = sub.name;
+
+      const price = document.createElement("p");
+      price.className = "sub-meta";
+      price.textContent = fmtCurrency(sub.price);
+
+      const chargeDate = document.createElement("p");
+      chargeDate.className = "sub-meta";
+      chargeDate.textContent = new Date(sub.nextChargeDate).toLocaleDateString("ru-RU");
+
+      const remaining = document.createElement("p");
+      remaining.className = "sub-meta";
+      remaining.textContent = `Через: ${humanRemaining(days)}`;
+
+      el.append(title, price, chargeDate, remaining);
       timelineEl.appendChild(el);
     });
 }
@@ -228,16 +305,18 @@ function stopRealtime() {
   }
 }
 
-function startRealtimeForFamilyCode(familyCode) {
+async function startRealtimeForFamilyCode(familyCode) {
   if (!currentUser) return;
 
   stopRealtime();
+
+  await ensureFamilyMembership(familyCode, currentUser);
   setSpaceConnected(familyCode);
 
   stopSubscriptionsWatcher = watchSubscriptions(
     familyCode,
     (items) => {
-      subscriptions = items;
+      subscriptions = normalizeSubscriptions(items);
       saveCache();
       render();
     },
@@ -248,14 +327,14 @@ function startRealtimeForFamilyCode(familyCode) {
   );
 }
 
-function connectFamilyCode(rawCode) {
+async function connectFamilyCode(rawCode) {
   const code = String(rawCode || "")
     .trim()
     .toUpperCase();
 
   if (!FAMILY_CODE_RE.test(code)) {
     alert("Код пары: 4–12 символов, только латинские буквы и цифры.");
-    return;
+    return false;
   }
 
   currentFamilyCode = code;
@@ -263,8 +342,10 @@ function connectFamilyCode(rawCode) {
   familyCodeInput.value = code;
 
   if (currentUser) {
-    startRealtimeForFamilyCode(code);
+    await startRealtimeForFamilyCode(code);
   }
+
+  return true;
 }
 
 function randomFamilyCode() {
@@ -295,20 +376,29 @@ googleSignInBtn.addEventListener("click", async () => {
 signOutBtn.addEventListener("click", async () => {
   try {
     await logout();
+    clearSensitiveLocalState();
   } catch {
     alert("Не удалось выйти из аккаунта.");
   }
 });
 
-familyCodeForm.addEventListener("submit", (event) => {
+familyCodeForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  connectFamilyCode(familyCodeInput.value);
+  try {
+    await connectFamilyCode(familyCodeInput.value);
+  } catch {
+    alert("Не удалось подключить код пары. Проверьте интернет и права доступа.");
+  }
 });
 
-generateFamilyBtn.addEventListener("click", () => {
+generateFamilyBtn.addEventListener("click", async () => {
   const code = randomFamilyCode();
   familyCodeInput.value = code;
-  connectFamilyCode(code);
+  try {
+    await connectFamilyCode(code);
+  } catch {
+    alert("Не удалось создать пространство. Проверьте интернет и права доступа.");
+  }
 });
 
 form.addEventListener("submit", async (e) => {
@@ -320,17 +410,51 @@ form.addEventListener("submit", async (e) => {
   }
 
   const fd = new FormData(form);
-  const frequency = fd.get("frequency");
+  const frequency = String(fd.get("frequency") || "").trim();
+  const price = Number(fd.get("price"));
+  const customDaysValue = Number(fd.get("customDays"));
+  const nextChargeDate = parseIsoDateOrNull(fd.get("nextChargeDate"));
+  const endDate = fd.get("endDate") ? parseIsoDateOrNull(fd.get("endDate")) : null;
+
+  if (!ALLOWED_FREQUENCIES.has(frequency)) {
+    alert("Некорректная периодичность.");
+    return;
+  }
+
+  if (!Number.isFinite(price) || price < 0) {
+    alert("Цена должна быть числом не меньше 0.");
+    return;
+  }
+
+  if (frequency === "custom-days" && !(Number.isInteger(customDaysValue) && customDaysValue >= 1)) {
+    alert("Для «Каждые N дней» укажите целое количество дней (минимум 1).");
+    return;
+  }
+
+  if (!nextChargeDate) {
+    alert("Укажите корректную дату следующего списания.");
+    return;
+  }
+
+  if (fd.get("endDate") && !endDate) {
+    alert("Укажите корректную дату окончания.");
+    return;
+  }
+
+  if (endDate && endDate < nextChargeDate) {
+    alert("Дата окончания не может быть раньше даты следующего списания.");
+    return;
+  }
 
   const entry = {
     name: String(fd.get("name") || "").trim(),
-    price: Number(fd.get("price") || 0),
+    price,
     frequency,
-    customDays: frequency === "custom-days" ? Number(fd.get("customDays") || 0) : null,
-    nextChargeDate: String(fd.get("nextChargeDate") || ""),
+    customDays: frequency === "custom-days" ? customDaysValue : null,
+    nextChargeDate,
     cardName: String(fd.get("cardName") || "").trim(),
     cardLast4: String(fd.get("cardLast4") || "").trim(),
-    endDate: fd.get("endDate") ? String(fd.get("endDate")) : null,
+    endDate,
   };
 
   addSubscriptionBtn.disabled = true;
@@ -356,7 +480,7 @@ if (!hasFirebaseConfig()) {
 } else {
   initFirebase();
   firebaseReady = true;
-  watchAuth((user) => {
+  watchAuth(async (user) => {
     currentUser = user;
 
     if (!firebaseReady) return;
@@ -364,7 +488,13 @@ if (!hasFirebaseConfig()) {
     if (user) {
       setAuthUiLoggedIn(user);
       if (currentFamilyCode) {
-        startRealtimeForFamilyCode(currentFamilyCode);
+        try {
+          await startRealtimeForFamilyCode(currentFamilyCode);
+        } catch {
+          spaceBadge.textContent = `Код пары: ${currentFamilyCode}`;
+          spaceBadge.className = "sync-badge warn";
+          spaceStatusText.textContent = "Нет доступа к пространству. Проверьте код пары.";
+        }
       } else {
         setSpaceDisconnected();
       }

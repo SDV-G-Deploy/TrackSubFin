@@ -17,6 +17,7 @@ import {
   orderBy,
   query,
   serverTimestamp,
+  setDoc,
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
 export function hasFirebaseConfig() {
@@ -61,6 +62,21 @@ export async function logout() {
 
 function subscriptionsCollection(familyCode) {
   return collection(db, "spaces", familyCode, "subscriptions");
+}
+
+export async function ensureFamilyMembership(familyCode, user) {
+  const memberRef = doc(db, "spaces", familyCode, "members", user.uid);
+  await setDoc(
+    memberRef,
+    {
+      uid: user.uid,
+      email: user.email || null,
+      name: user.displayName || null,
+      updatedAt: serverTimestamp(),
+      createdAt: serverTimestamp(),
+    },
+    { merge: true }
+  );
 }
 
 export function watchSubscriptions(familyCode, callback, onError) {
