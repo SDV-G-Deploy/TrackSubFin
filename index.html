@@ -153,6 +153,19 @@
         </div>
         <p id="ratesNote" class="sub-meta rates-note"></p>
 
+        <div class="forecast">
+          <div class="forecast-head">
+            <h3 class="section-title" id="forecastTitle">Списания по месяцам · прогноз на 12 мес.</h3>
+            <p id="forecastNote" class="sub-meta forecast-note"></p>
+          </div>
+          <div id="forecastChart" class="forecast-chart" role="img" aria-labelledby="forecastTitle forecastNote"></div>
+          <table id="forecastTable" class="visually-hidden">
+            <caption>Прогноз списаний по месяцам</caption>
+            <thead><tr><th scope="col">Месяц</th><th scope="col">Сумма</th><th scope="col">Списаний</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
         <div class="breakdown-grid">
           <div>
             <h3 class="section-title">Кто сколько платит</h3>
@@ -192,7 +205,10 @@
       </section>
 
       <section class="panel form-panel" aria-labelledby="formTitle">
-        <h2 id="formTitle">Новая подписка</h2>
+        <div class="panel-title-row">
+          <h2 id="formTitle">Новая подписка</h2>
+          <button id="cancelEditBtn" class="btn-ghost hidden" type="button">Отменить редактирование</button>
+        </div>
         <form id="subscriptionForm" class="form-grid" novalidate>
           <label>
             Название продукта
@@ -276,7 +292,10 @@
         <div class="sub-side">
           <p class="sub-price"></p>
           <p class="sub-converted"></p>
-          <button class="btn-danger" type="button">Удалить</button>
+          <div class="sub-actions">
+            <button class="btn-secondary btn-edit hidden" type="button">Изменить</button>
+            <button class="btn-danger" type="button">Удалить</button>
+          </div>
         </div>
       </article>
     </template>

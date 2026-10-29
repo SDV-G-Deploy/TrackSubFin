@@ -9,6 +9,7 @@ import {
   formatMoney,
   frequencyLabel,
   memberLabel,
+  monthlyForecast,
   monthlyIn,
   normalizeSubscriptions,
   splitByMember,
@@ -69,6 +70,9 @@ function describeFirebaseError(error) {
     return "Инвайт уже использован/истёк или недействителен. Попросите новый.";
   }
 
+  if (code === "permission-denied" && error?.extended) {
+    return "Недостаточно прав (permission-denied). Изменять подписку может только её автор; если ошибка при добавлении — владельцу проекта нужно задеплоить актуальные Firestore Rules (поля валюты и категории).";
+  }
   if (code === "permission-denied") {
     return "Недостаточно прав (permission-denied). Проверьте Firestore Rules и корректность инвайта.";
   }
@@ -97,6 +101,11 @@ const cardTemplate = $("subscriptionCardTemplate");
 const addSubscriptionBtn = $("addSubscriptionBtn");
 const formError = $("formError");
 const formHint = $("formHint");
+const formTitle = $("formTitle");
+const cancelEditBtn = $("cancelEditBtn");
+const forecastChartEl = $("forecastChart");
+const forecastNoteEl = $("forecastNote");
+const forecastTableBody = document.querySelector("#forecastTable tbody");
 const toastEl = $("toast");
 
 const displayCurrencySelect = $("displayCurrency");
@@ -146,6 +155,7 @@ let subscriptions = [];
 let stopSubscriptionsWatcher = null;
 let serviceReady = false;
 let renewalWindow = 30;
+let editingId = null;
 let displayCurrency = CURRENCIES.includes(safeGet(DISPLAY_CURRENCY_KEY))
   ? safeGet(DISPLAY_CURRENCY_KEY)
   : DEMO
@@ -392,6 +402,156 @@ function renderBars(container, groups, emptyText) {
   }
 }
 
+const MONTH_SHORT = new Intl.DateTimeFormat("ru-RU", { month: "short", timeZone: "UTC" });
+const MONTH_LONG = new Intl.DateTimeFormat("ru-RU", { month: "long", year: "numeric", timeZone: "UTC" });
+
+function monthDate(ym) {
+  return new Date(`${ym}-01T00:00:00Z`);
+}
+
+function monthLong(ym) {
+  const text = MONTH_LONG.format(monthDate(ym));
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+function renderForecast(items) {
+  forecastChartEl.innerHTML = "";
+  forecastTableBody.innerHTML = "";
+  const months = monthlyForecast(items, todayIso(), 12, displayCurrency);
+  const max = Math.max(...months.map((m) => m.total), 0);
+  if (!items.length || max === 0) {
+    forecastNoteEl.textContent = "";
+    forecastChartEl.append(emptyNote(items.length ? "Списаний в ближайшие 12 месяцев нет." : emptyListText()));
+    return;
+  }
+  const sum = months.reduce((a, m) => a + m.total, 0);
+  const avg = sum / months.length;
+  const peak = months.reduce((a, m) => (m.total > a.total ? m : a), months[0]);
+  forecastNoteEl.textContent = `Итого ${formatMoney(sum, displayCurrency)} · в среднем ${formatMoney(
+    avg,
+    displayCurrency
+  )} / мес · пик — ${MONTH_LONG.format(monthDate(peak.month))} Текущий месяц считается с сегодняшнего дня.`;
+
+  const plot = document.createElement("div");
+  plot.className = "fc-plot";
+  const avgLine = document.createElement("div");
+  avgLine.className = "fc-avg";
+  avgLine.style.bottom = `${(avg / max) * 100}%`;
+  avgLine.setAttribute("aria-hidden", "true");
+  const avgLabel = document.createElement("span");
+  avgLabel.textContent = "среднее";
+  avgLine.append(avgLabel);
+  plot.append(avgLine);
+
+  months.forEach((m, i) => {
+    const col = document.createElement("div");
+    col.className = "fc-col";
+    col.tabIndex = 0;
+    const label = `${monthLong(m.month)}: ${formatMoney(m.total, displayCurrency)}, ${m.count} ${plural(
+      m.count,
+      "списание",
+      "списания",
+      "списаний"
+    )}`;
+    col.setAttribute("aria-label", label);
+    const tip = document.createElement("span");
+    tip.className = "fc-tip";
+    tip.textContent = label;
+    if (i > 8) tip.classList.add("fc-tip-left");
+    const bar = document.createElement("div");
+    bar.className = "fc-bar";
+    bar.style.height = m.total > 0 ? `${Math.max(2, (m.total / max) * 100)}%` : "0";
+    if (m.month === peak.month) {
+      col.classList.add("is-peak");
+      const v = document.createElement("span");
+      v.className = "fc-peak-value";
+      v.textContent = formatMoney(m.total, displayCurrency);
+      bar.append(v);
+    }
+    col.append(bar, tip);
+    plot.append(col);
+
+    const tr = document.createElement("tr");
+    for (const text of [monthLong(m.month), formatMoney(m.total, displayCurrency), String(m.count)]) {
+      const td = document.createElement("td");
+      td.textContent = text;
+      tr.append(td);
+    }
+    forecastTableBody.append(tr);
+  });
+
+  const axis = document.createElement("div");
+  axis.className = "fc-axis";
+  axis.setAttribute("aria-hidden", "true");
+  months.forEach((m, i) => {
+    const t = document.createElement("span");
+    const d = monthDate(m.month);
+    const mon = document.createElement("span");
+    mon.className = "fc-mon";
+    mon.textContent = MONTH_SHORT.format(d).replace(".", "");
+    if (i % 2 === 1) t.classList.add("fc-odd");
+    t.append(mon);
+    if (d.getUTCMonth() === 0) {
+      const year = document.createElement("small");
+      year.className = "fc-year";
+      year.textContent = String(d.getUTCFullYear());
+      t.append(year);
+    }
+    axis.append(t);
+  });
+
+  forecastChartEl.append(plot, axis);
+}
+
+// ---------- редактирование ----------
+
+function canEdit(sub) {
+  return Boolean(
+    currentUser &&
+      currentFamilyCode &&
+      typeof service?.updateSubscription === "function" &&
+      sub.createdBy?.uid === currentUser.uid
+  );
+}
+
+function setCustomDaysVisible(show) {
+  customDaysField.classList.toggle("hidden", !show);
+  customDaysField.querySelector("input").required = show;
+}
+
+function startEdit(sub) {
+  editingId = sub.id;
+  showInlineError(formError, "");
+  const f = form.elements;
+  f.name.value = sub.name;
+  f.price.value = String(sub.price);
+  f.currency.value = sub.currency;
+  f.category.value = sub.category;
+  f.frequency.value = sub.frequency;
+  f.customDays.value = sub.customDays ?? "";
+  setCustomDaysVisible(sub.frequency === "custom-days");
+  f.nextChargeDate.value = sub.nextChargeDate;
+  f.cardName.value = sub.cardName;
+  f.cardLast4.value = sub.cardLast4;
+  f.endDate.value = sub.endDate || "";
+  formTitle.textContent = `Изменить: ${sub.name}`;
+  addSubscriptionBtn.textContent = "Сохранить изменения";
+  cancelEditBtn.classList.remove("hidden");
+  form.closest(".panel").classList.add("is-editing");
+  form.closest(".panel").scrollIntoView({ behavior: "smooth", block: "start" });
+  f.name.focus({ preventScroll: true });
+}
+
+function stopEdit() {
+  editingId = null;
+  form.reset();
+  setCustomDaysVisible(false);
+  formTitle.textContent = "Новая подписка";
+  addSubscriptionBtn.textContent = "Добавить подписку";
+  cancelEditBtn.classList.add("hidden");
+  form.closest(".panel").classList.remove("is-editing");
+}
+
 function renderTimeline(items) {
   timelineEl.innerHTML = "";
   const r = upcomingRenewals(items, todayIso(), renewalWindow, displayCurrency);
@@ -514,6 +674,13 @@ function renderList(items) {
       const converted = node.querySelector(".sub-converted");
       converted.textContent = `≈ ${formatMoney(monthlyIn(sub, displayCurrency), displayCurrency)} / мес`;
 
+      const editBtn = node.querySelector(".btn-edit");
+      if (canEdit(sub)) {
+        editBtn.classList.remove("hidden");
+        editBtn.setAttribute("aria-label", `Изменить подписку ${sub.name}`);
+        editBtn.addEventListener("click", () => startEdit(sub));
+      }
+
       const removeBtn = node.querySelector(".btn-danger");
       removeBtn.setAttribute("aria-label", `Удалить подписку ${sub.name}`);
       removeBtn.disabled = !currentUser || !currentFamilyCode;
@@ -523,6 +690,7 @@ function renderList(items) {
         removeBtn.disabled = true;
         try {
           await service.removeSubscription(currentFamilyCode, sub.id);
+          if (editingId === sub.id) stopEdit();
           notify(`Подписка «${sub.name}» удалена.`);
         } catch (error) {
           notify(`Не удалось удалить подписку. ${describeFirebaseError(error)}`, "error");
@@ -535,7 +703,12 @@ function renderList(items) {
 }
 
 function render() {
+  if (editingId && !subscriptions.some((s) => s.id === editingId && canEdit(s))) {
+    stopEdit();
+    notify("Редактируемая подписка удалена или больше недоступна.", "error");
+  }
   renderSummary(subscriptions);
+  renderForecast(subscriptions);
   renderTimeline(subscriptions);
   renderHints(subscriptions);
   renderList(subscriptions);
@@ -669,6 +842,11 @@ windowButtons.forEach((btn) => {
   });
 });
 
+cancelEditBtn.addEventListener("click", () => {
+  stopEdit();
+  showInlineError(formError, "");
+});
+
 exportCsvBtn.addEventListener("click", () => {
   if (!subscriptions.length) return;
   const csv = toCsv(subscriptions, displayCurrency);
@@ -685,9 +863,7 @@ exportCsvBtn.addEventListener("click", () => {
 });
 
 frequencySelect.addEventListener("change", (e) => {
-  const show = e.target.value === "custom-days";
-  customDaysField.classList.toggle("hidden", !show);
-  customDaysField.querySelector("input").required = show;
+  setCustomDaysVisible(e.target.value === "custom-days");
 });
 
 googleSignInBtn.addEventListener("click", async () => {
@@ -772,14 +948,21 @@ form.addEventListener("submit", async (e) => {
     return;
   }
 
+  const extended = Boolean(service.capabilities?.extendedFields);
   addSubscriptionBtn.disabled = true;
   try {
-    await service.createSubscription(currentFamilyCode, entry, currentUser);
-    form.reset();
-    customDaysField.classList.add("hidden");
-    customDaysField.querySelector("input").required = false;
-    notify(`Подписка «${entry.name}» добавлена.`);
+    if (editingId) {
+      await service.updateSubscription(currentFamilyCode, editingId, entry);
+      stopEdit();
+      notify(`Подписка «${entry.name}» сохранена.`);
+    } else {
+      await service.createSubscription(currentFamilyCode, entry, currentUser);
+      form.reset();
+      setCustomDaysVisible(false);
+      notify(`Подписка «${entry.name}» добавлена.`);
+    }
   } catch (err) {
+    if (err && extended) err.extended = true;
     showInlineError(formError, describeFirebaseError(err));
   } finally {
     addSubscriptionBtn.disabled = !currentUser || !currentFamilyCode;
@@ -789,6 +972,7 @@ form.addEventListener("submit", async (e) => {
 // ---------- запуск ----------
 
 async function onAuthChanged(user) {
+  if (editingId && user?.uid !== currentUser?.uid) stopEdit();
   currentUser = user;
 
   if (user) {
@@ -825,7 +1009,6 @@ function setupDemoUi(demo) {
   signOutBtn.classList.add("hidden");
   tryDemoLink.classList.add("hidden");
   demoMemberField.classList.remove("hidden");
-  document.querySelectorAll(".ext-field").forEach((el) => el.classList.remove("hidden"));
 
   demoMemberSelect.innerHTML = "";
   for (const m of demo.members) {
@@ -885,6 +1068,9 @@ async function boot() {
     }
   }
 
+  if (service.capabilities?.extendedFields) {
+    document.querySelectorAll(".ext-field").forEach((el) => el.classList.remove("hidden"));
+  }
   service.initFirebase();
   serviceReady = true;
   setAuthUiLoggedOut();

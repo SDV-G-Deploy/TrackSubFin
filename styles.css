@@ -555,6 +555,177 @@ select:focus-visible {
   background: var(--accent);
 }
 
+/* ---------- прогноз по месяцам ---------- */
+
+.forecast {
+  margin-top: 14px;
+}
+
+.forecast-head .section-title {
+  margin-bottom: 2px;
+}
+
+.forecast-note {
+  margin: 0 0 10px;
+  font-size: 0.85rem;
+}
+
+.fc-plot {
+  position: relative;
+  height: 150px;
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 2px;
+  align-items: end;
+  padding-top: 22px; /* место под подпись пика */
+  border-bottom: 1px solid rgba(147, 170, 224, 0.35);
+}
+
+.fc-col {
+  position: relative;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  outline: none;
+  cursor: default;
+}
+
+.fc-bar {
+  position: relative;
+  width: min(70%, 26px);
+  background: var(--accent);
+  border-radius: 4px 4px 0 0;
+  opacity: 0.85;
+  transition: opacity 0.12s;
+}
+
+.fc-col:hover .fc-bar,
+.fc-col:focus-visible .fc-bar,
+.fc-col.is-peak .fc-bar {
+  opacity: 1;
+}
+
+.fc-col:focus-visible {
+  box-shadow: inset 0 0 0 2px rgba(95, 140, 255, 0.6);
+  border-radius: 6px;
+}
+
+.fc-peak-value {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.fc-tip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  width: max-content;
+  max-width: 180px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: #1d2a46;
+  border: 1px solid rgba(147, 170, 224, 0.4);
+  color: var(--text);
+  font-size: 0.78rem;
+  line-height: 1.3;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+}
+
+.fc-col:first-child .fc-tip,
+.fc-col:nth-child(2) .fc-tip {
+  left: 0;
+  transform: none;
+}
+
+.fc-tip-left {
+  left: auto;
+  right: 0;
+  transform: none;
+}
+
+.fc-col:hover .fc-tip,
+.fc-col:focus-visible .fc-tip {
+  opacity: 1;
+  visibility: visible;
+}
+
+.fc-avg {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 1px dashed rgba(229, 236, 255, 0.45);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.fc-avg span {
+  position: absolute;
+  right: 0;
+  bottom: 2px;
+  font-size: 0.7rem;
+  color: var(--muted);
+  background: rgba(18, 27, 46, 0.85);
+  padding: 0 4px;
+  border-radius: 4px;
+}
+
+.fc-axis {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 2px;
+  margin-top: 4px;
+  font-size: 0.72rem;
+  color: var(--muted);
+  text-align: center;
+}
+
+.fc-axis > span {
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.fc-year {
+  display: block;
+  font-size: 0.68rem;
+  color: var(--text);
+}
+
+@media (max-width: 480px) {
+  .fc-axis .fc-odd .fc-mon {
+    visibility: hidden;
+  }
+}
+
+/* ---------- редактирование ---------- */
+
+.sub-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.btn-edit {
+  padding: 8px 10px;
+}
+
+.form-panel.is-editing {
+  border-color: rgba(95, 140, 255, 0.7);
+  box-shadow: 0 0 0 1px rgba(95, 140, 255, 0.35);
+}
+
 /* ---------- период, подсказки ---------- */
 
 .segmented {
