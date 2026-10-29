@@ -162,3 +162,25 @@ test("toCsv: header, escaping and formula-injection guard", () => {
   assert.ok(lines[1].includes('"Visa, gold"'));
   assert.ok(lines[1].endsWith(",2026-10-01"));
 });
+
+test("monthlyForecast buckets real charges by calendar month incl. yearly spike and endDate", async () => {
+  const { monthlyForecast } = await import("../logic.js");
+  const items = [
+    { name: "M", price: 10, currency: "EUR", frequency: "monthly", nextChargeDate: "2026-10-20", endDate: null },
+    { name: "Y", price: 120, currency: "EUR", frequency: "yearly", nextChargeDate: "2027-02-01", endDate: null },
+    { name: "E", price: 100, currency: "RSD", frequency: "monthly", nextChargeDate: "2026-11-05", endDate: "2026-12-31" },
+    { name: "D", price: 2, currency: "USD", frequency: "custom-days", customDays: 14, nextChargeDate: "2026-10-01", endDate: null },
+  ];
+  const f = monthlyForecast(items, "2026-10-15", 6, "EUR", RATES);
+  assert.deepEqual(f.map((b) => b.month), ["2026-10", "2026-11", "2026-12", "2027-01", "2027-02", "2027-03"]);
+  // Oct: M on 20th (10) + D on 15th and 29th (2 USD = 1 EUR each)
+  assert.equal(f[0].count, 3);
+  assert.equal(f[0].total, 12);
+  // Nov: M + E (100 RSD = 1 EUR) + D twice (2 USD = 1 EUR each)
+  assert.equal(f[1].total, 13);
+  // Jan: E ended
+  assert.equal(f[3].total, 10 + (f[3].count - 1));
+  // Feb: yearly spike
+  assert.ok(f[4].total >= 130);
+  assert.equal(monthlyForecast([], "2026-10-15", 3, "EUR", RATES).every((b) => b.total === 0), true);
+});

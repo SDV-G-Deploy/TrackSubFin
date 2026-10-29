@@ -249,6 +249,36 @@ export function upcomingRenewals(items, today, days, currency, rates = EXCHANGE_
   return { items: list, total, currency };
 }
 
+/**
+ * Прогноз фактических списаний по календарным месяцам: текущий месяц (от today)
+ * и следующие months-1. Учитывает периодичность, годовые всплески и endDate.
+ * Возвращает [{ month: "YYYY-MM", total, count }] в валюте currency.
+ */
+export function monthlyForecast(items, today, months, currency, rates = EXCHANGE_RATES) {
+  const startMonth = today.slice(0, 7);
+  const buckets = [];
+  const index = new Map();
+  for (let i = 0; i < months; i += 1) {
+    const month = addMonths(`${startMonth}-01`, i).slice(0, 7);
+    index.set(month, buckets.length);
+    buckets.push({ month, total: 0, count: 0 });
+  }
+  const lastMonth = buckets[buckets.length - 1]?.month;
+  if (!lastMonth) return [];
+  const lastDay = addDays(addMonths(`${lastMonth}-01`, 1), -1);
+  const days = daysBetween(today, lastDay);
+  for (const sub of items) {
+    const amount = convert(sub.price, sub.currency || DEFAULT_CURRENCY, currency, rates);
+    for (const date of occurrencesInWindow(sub, today, days)) {
+      const i = index.get(date.slice(0, 7));
+      if (i == null) continue;
+      buckets[i].total += amount;
+      buckets[i].count += 1;
+    }
+  }
+  return buckets.map((b) => ({ ...b, total: round2(b.total) }));
+}
+
 export function memberLabel(createdBy) {
   if (!createdBy) return "Не указан";
   return createdBy.name || createdBy.email || "Участник";
