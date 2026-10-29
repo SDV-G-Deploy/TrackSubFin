@@ -13,8 +13,18 @@ service cloud.firestore {
     function hasOnlyAllowedSubscriptionKeys(data) {
       return data.keys().hasOnly([
         'name', 'price', 'frequency', 'customDays', 'nextChargeDate', 'cardName', 'cardLast4',
-        'endDate', 'createdAt', 'createdBy'
+        'endDate', 'createdAt', 'createdBy', 'currency', 'category'
       ]);
+    }
+
+    // Необязательные поля. Значения — строго из списков в logic.js (CURRENCIES, CATEGORIES);
+    // при изменении списков в logic.js их нужно синхронно поменять здесь.
+    // Старые документы без этих полей остаются валидными.
+    function validOptionalSubscriptionFields(data) {
+      return (!('currency' in data) || data.currency in ['EUR', 'USD', 'RSD'])
+        && (!('category' in data) || data.category in [
+          'Видео', 'Музыка', 'Софт', 'Облако', 'Связь', 'Спорт', 'Доставка', 'Другое'
+        ]);
     }
 
     function hasRequiredSubscriptionKeys(data) {
@@ -48,7 +58,8 @@ service cloud.firestore {
         && data.nextChargeDate is string
         && data.nextChargeDate.matches('^\\d{4}-\\d{2}-\\d{2}$')
         && data.createdAt is timestamp
-        && validCreatedBy(data);
+        && validCreatedBy(data)
+        && validOptionalSubscriptionFields(data);
     }
 
     function validFrequencyFields(data) {
@@ -208,7 +219,8 @@ service cloud.firestore {
           && validBaseSubscription(request.resource.data)
           && validFrequencyFields(request.resource.data)
           && validEndDate(request.resource.data)
-          && request.resource.data.createdBy.uid == resource.data.createdBy.uid;
+          && request.resource.data.createdBy.uid == resource.data.createdBy.uid
+          && request.resource.data.createdAt == resource.data.createdAt;
 
         allow delete: if isMember(familyCode);
       }

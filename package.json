@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "lint:smoke": "node --check app.js && node --check firebase-service.js && node --check logic.js && node --check demo-service.js",
-    "test": "node --test tests/logic.test.mjs tests/demo-service.test.mjs",
+    "test": "node --test tests/logic.test.mjs tests/demo-service.test.mjs tests/rules-sync.test.mjs",
     "test:rules": "node tests/firestore.rules.test.mjs",
     "test:rules:emulator": "firebase emulators:exec --only firestore --project demo-tracksubfin \"npm run test:rules\""
   },
