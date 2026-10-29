@@ -3,10 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="description" content="Общий трекер подписок для пары или семьи: итоги в одной валюте, ближайшие списания, подсказки, что отменить." />
     <title>TrackSubFin</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
+    <a class="skip-link" href="#summaryPanel">Перейти к сводке</a>
     <main class="app">
       <header class="app-header">
         <div>
@@ -15,56 +18,91 @@
         </div>
       </header>
 
+      <section id="demoBanner" class="panel demo-banner hidden" aria-labelledby="demoBannerTitle">
+        <div class="demo-banner-text">
+          <h2 id="demoBannerTitle"><span class="demo-tag">ДЕМО</span> Демо-режим</h2>
+          <p class="sub-meta">
+            Примерные данные. Всё хранится только в этом браузере (localStorage), Firebase и Google не используются.
+            Откройте вторую вкладку и переключите участника — изменения синхронизируются между вкладками.
+          </p>
+        </div>
+        <div class="sync-actions">
+          <button id="resetDemoBtn" class="btn-secondary" type="button">Сбросить демо-данные</button>
+          <a id="exitDemoLink" class="btn-ghost btn-link" href="./">Выйти из демо</a>
+        </div>
+      </section>
+
       <section id="firebaseSetupNotice" class="panel warning-panel hidden">
         <h2>Нужна настройка Firebase</h2>
         <p class="sub-meta">
           Добавьте файл <code>firebase-config.js</code> на основе <code>firebase-config.template.js</code>,
-          затем обновите страницу.
+          затем обновите страницу. Или посмотрите <a href="?demo=1">демо-режим</a> — он работает без Firebase.
         </p>
       </section>
 
-      <section class="panel auth-panel">
+      <section id="bootErrorNotice" class="panel warning-panel hidden" role="alert">
+        <h2>Не удалось загрузить Firebase</h2>
+        <p class="sub-meta">
+          Проверьте подключение к интернету и обновите страницу. Демо-режим работает офлайн:
+          <a href="?demo=1">открыть демо</a>.
+        </p>
+      </section>
+
+      <section class="panel auth-panel" aria-labelledby="authTitle">
         <div class="panel-title-row">
-          <h2>Аккаунт</h2>
-          <span id="authStateBadge" class="sync-badge muted">Не вошли</span>
+          <h2 id="authTitle">Аккаунт</h2>
+          <span id="authStateBadge" class="sync-badge muted">Загрузка…</span>
         </div>
 
         <div id="userInfo" class="user-info hidden">
-          <img id="userAvatar" class="avatar" alt="Аватар" />
+          <img id="userAvatar" class="avatar" alt="" />
+          <span id="userInitial" class="avatar avatar-fallback hidden" aria-hidden="true"></span>
           <div>
             <p id="userName" class="user-name"></p>
             <p id="userEmail" class="sub-meta"></p>
           </div>
         </div>
 
-        <div class="sync-actions">
-          <button id="googleSignInBtn" class="btn-primary" type="button">Войти через Google</button>
+        <label id="demoMemberField" class="inline-field hidden">
+          Действовать от имени участника
+          <select id="demoMemberSelect"></select>
+        </label>
+
+        <div id="realAuthActions" class="sync-actions">
+          <button id="googleSignInBtn" class="btn-primary" type="button" disabled>Войти через Google</button>
           <button id="signOutBtn" class="btn-secondary" type="button" disabled>Выйти</button>
+          <a id="tryDemoLink" class="btn-secondary btn-link" href="?demo=1">Попробовать демо без входа</a>
         </div>
       </section>
 
-      <section class="panel space-panel">
+      <section class="panel space-panel" aria-labelledby="spaceTitle">
         <div class="panel-title-row">
-          <h2>Общее пространство</h2>
+          <h2 id="spaceTitle">Общее пространство</h2>
           <span id="spaceBadge" class="sync-badge muted">Не подключено</span>
         </div>
 
-        <p id="spaceStatusText" class="sub-meta">Введите код пространства и инвайт-код.</p>
+        <p id="spaceStatusText" class="sub-meta" aria-live="polite">Введите код пространства и инвайт-код.</p>
 
-        <form id="joinForm" class="space-actions">
+        <form id="joinForm" class="space-actions" novalidate>
+          <label class="visually-hidden" for="familyCodeInput">Код пространства</label>
           <input
             id="familyCodeInput"
             name="familyCode"
             type="text"
+            autocomplete="off"
+            autocapitalize="characters"
             minlength="4"
             maxlength="12"
             pattern="[A-Za-z0-9]{4,12}"
             placeholder="Код пространства, например A7K9Q2"
           />
+          <label class="visually-hidden" for="inviteCodeInput">Инвайт-код или share-код</label>
           <input
             id="inviteCodeInput"
             name="inviteCode"
             type="text"
+            autocomplete="off"
+            autocapitalize="characters"
             minlength="10"
             maxlength="24"
             placeholder="Инвайт или share-код"
@@ -73,6 +111,7 @@
           <button id="generateFamilyBtn" class="btn-secondary" type="button" disabled>Создать код</button>
           <button id="createInviteBtn" class="btn-secondary" type="button" disabled>Создать инвайт</button>
         </form>
+        <p id="joinError" class="error-text hidden" role="alert"></p>
 
         <div id="createdInviteBox" class="invite-box hidden">
           <p><strong>Инвайт:</strong> <code id="createdInviteCode"></code></p>
@@ -80,17 +119,99 @@
         </div>
       </section>
 
-      <section class="panel form-panel">
-        <h2>Новая подписка</h2>
-        <form id="subscriptionForm" class="form-grid">
+      <section id="summaryPanel" class="panel" aria-labelledby="summaryTitle" tabindex="-1">
+        <div class="panel-title-row">
+          <h2 id="summaryTitle">Сводка</h2>
+          <div class="toolbar">
+            <label class="inline-field compact">
+              Валюта
+              <select id="displayCurrency"></select>
+            </label>
+            <button id="exportCsvBtn" class="btn-secondary" type="button" disabled>Экспорт CSV</button>
+          </div>
+        </div>
+
+        <div class="kpi-grid">
+          <div class="kpi">
+            <p class="kpi-label">В месяц</p>
+            <p id="kpiMonthly" class="kpi-value">—</p>
+          </div>
+          <div class="kpi">
+            <p class="kpi-label">В год</p>
+            <p id="kpiYearly" class="kpi-value">—</p>
+          </div>
+          <div class="kpi">
+            <p class="kpi-label">Списания за 7 дней</p>
+            <p id="kpiNext7" class="kpi-value">—</p>
+            <p id="kpiNext7Count" class="kpi-note"></p>
+          </div>
+          <div class="kpi">
+            <p class="kpi-label">Списания за 30 дней</p>
+            <p id="kpiNext30" class="kpi-value">—</p>
+            <p id="kpiNext30Count" class="kpi-note"></p>
+          </div>
+        </div>
+        <p id="ratesNote" class="sub-meta rates-note"></p>
+
+        <div class="breakdown-grid">
+          <div>
+            <h3 class="section-title">Кто сколько платит</h3>
+            <ul id="memberSplit" class="bar-list"></ul>
+          </div>
+          <div>
+            <h3 class="section-title">По категориям</h3>
+            <ul id="categoryBreakdown" class="bar-list"></ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="timelineTitle">
+        <div class="panel-title-row">
+          <h2 id="timelineTitle">Ближайшие списания</h2>
+          <div class="segmented" role="group" aria-label="Период">
+            <button type="button" class="seg-btn" data-window="7" aria-pressed="false">7 дней</button>
+            <button type="button" class="seg-btn" data-window="30" aria-pressed="true">30 дней</button>
+          </div>
+        </div>
+        <p id="timelineTotal" class="sub-meta"></p>
+        <ul id="timeline" class="timeline" aria-label="Ближайшие списания"></ul>
+      </section>
+
+      <section class="panel" aria-labelledby="hintsTitle">
+        <h2 id="hintsTitle">Что можно отменить</h2>
+        <p class="sub-meta">Подсказки по имеющимся данным (цена, категория, даты). Данных об использовании нет — решать вам.</p>
+        <ul id="hintsList" class="hints-list"></ul>
+      </section>
+
+      <section class="panel" aria-labelledby="listTitle">
+        <div class="panel-title-row">
+          <h2 id="listTitle">Список подписок</h2>
+          <span id="subsCount" class="sync-badge muted">0</span>
+        </div>
+        <div id="subscriptionsList" class="subscriptions-list"></div>
+      </section>
+
+      <section class="panel form-panel" aria-labelledby="formTitle">
+        <h2 id="formTitle">Новая подписка</h2>
+        <form id="subscriptionForm" class="form-grid" novalidate>
           <label>
             Название продукта
-            <input required name="name" type="text" placeholder="YouTube Premium" />
+            <input required name="name" type="text" maxlength="120" placeholder="YouTube Premium" />
           </label>
 
           <label>
             Цена
-            <input required name="price" type="number" min="0" step="0.01" placeholder="9.99" />
+            <input required name="price" type="number" min="0" step="0.01" inputmode="decimal" placeholder="9.99" />
+          </label>
+
+          <label class="ext-field hidden">
+            Валюта
+            <select name="currency" id="currencySelect"></select>
+          </label>
+
+          <label class="ext-field hidden">
+            Категория
+            <select name="category" id="categorySelect"></select>
           </label>
 
           <label>
@@ -104,7 +225,7 @@
 
           <label id="customDaysField" class="hidden">
             Количество дней
-            <input name="customDays" type="number" min="1" step="1" placeholder="45" />
+            <input name="customDays" type="number" min="1" step="1" inputmode="numeric" placeholder="45" />
           </label>
 
           <label>
@@ -114,7 +235,7 @@
 
           <label>
             Карта (название)
-            <input required name="cardName" type="text" placeholder="Monobank Black" />
+            <input required name="cardName" type="text" maxlength="120" placeholder="Monobank Black" />
           </label>
 
           <label>
@@ -135,33 +256,26 @@
             <input name="endDate" type="date" />
           </label>
 
+          <p id="formError" class="error-text hidden full-row" role="alert"></p>
+          <p id="formHint" class="sub-meta full-row hidden"></p>
           <button type="submit" class="btn-primary" id="addSubscriptionBtn" disabled>Добавить подписку</button>
         </form>
       </section>
-
-      <section class="panel">
-        <div class="panel-title-row">
-          <h2>Ближайшие списания</h2>
-          <span id="totalMonthly" class="total-pill">$0.00 / мес</span>
-        </div>
-        <div id="timeline" class="timeline"></div>
-      </section>
-
-      <section class="panel">
-        <h2>Список подписок</h2>
-        <div id="subscriptionsList" class="subscriptions-list"></div>
-      </section>
     </main>
+
+    <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 
     <template id="subscriptionCardTemplate">
       <article class="sub-card">
         <div class="sub-main">
           <h3 class="sub-name"></h3>
+          <p class="sub-tags"></p>
           <p class="sub-meta"></p>
           <p class="sub-dates"></p>
         </div>
         <div class="sub-side">
           <p class="sub-price"></p>
+          <p class="sub-converted"></p>
           <button class="btn-danger" type="button">Удалить</button>
         </div>
       </article>

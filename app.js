@@ -1,23 +1,59 @@
 import {
-  bootstrapSpaceOwner,
-  consumeInviteAndJoinFamily,
-  createInvite,
-  createSubscription,
-  hasFirebaseConfig,
-  initFirebase,
-  loginWithGoogle,
-  logout,
-  removeSubscription,
-  touchMembership,
-  watchAuth,
-  watchSubscriptions,
-} from "./firebase-service.js";
+  CATEGORIES,
+  CURRENCIES,
+  DEFAULT_CATEGORY,
+  EXCHANGE_RATES,
+  cancelCandidates,
+  categoryBreakdown,
+  daysBetween,
+  formatMoney,
+  frequencyLabel,
+  memberLabel,
+  monthlyIn,
+  normalizeSubscriptions,
+  splitByMember,
+  toCsv,
+  todayIso,
+  totals,
+  upcomingRenewals,
+  validateSubscriptionInput,
+} from "./logic.js";
 
-const CACHE_KEY = "tracksubfin.cache.v3";
-const FAMILY_CODE_KEY = "tracksubfin.familyCode.v2";
+const DEMO = new URLSearchParams(window.location.search).get("demo") === "1";
+
+// В демо-режиме ключи UI отделены, чтобы демо не трогало (и не стирало) данные реального режима.
+const KEY_PREFIX = DEMO ? "tracksubfin.demoui" : "tracksubfin";
+const CACHE_KEY = `${KEY_PREFIX}.cache.v3`;
+const FAMILY_CODE_KEY = `${KEY_PREFIX}.familyCode.v2`;
+const DISPLAY_CURRENCY_KEY = `${KEY_PREFIX}.displayCurrency`;
 const FAMILY_CODE_RE = /^[A-Za-z0-9]{4,12}$/;
 const INVITE_CODE_RE = /^[A-Za-z0-9]{10,14}$/;
-const ALLOWED_FREQUENCIES = new Set(["monthly", "yearly", "custom-days"]);
+
+const $ = (id) => document.getElementById(id);
+
+function safeGet(key) {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function safeSet(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // приватный режим / заблокированное хранилище — не критично
+  }
+}
+
+function safeRemove(key) {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    // не критично
+  }
+}
 
 function describeFirebaseError(error) {
   const appMessage = error?.message || "";
@@ -40,92 +76,104 @@ function describeFirebaseError(error) {
     return "Операция не выполнена (failed-precondition). Обычно это конфликт правил или состояния данных.";
   }
   if (code === "unavailable") return "Firestore временно недоступен. Попробуйте ещё раз.";
+  if (code === "invalid-argument") return "Данные подписки некорректны.";
 
   return `Неизвестная ошибка${code ? ` (${code})` : ""}${appMessage ? `: ${appMessage}` : ""}.`;
 }
 
+const firebaseSetupNotice = $("firebaseSetupNotice");
+const bootErrorNotice = $("bootErrorNotice");
+const demoBanner = $("demoBanner");
+const resetDemoBtn = $("resetDemoBtn");
+const form = $("subscriptionForm");
+const frequencySelect = $("frequency");
+const customDaysField = $("customDaysField");
+const listEl = $("subscriptionsList");
+const subsCountEl = $("subsCount");
+const timelineEl = $("timeline");
+const timelineTotalEl = $("timelineTotal");
+const hintsListEl = $("hintsList");
+const cardTemplate = $("subscriptionCardTemplate");
+const addSubscriptionBtn = $("addSubscriptionBtn");
+const formError = $("formError");
+const formHint = $("formHint");
+const toastEl = $("toast");
 
-const firebaseSetupNotice = document.getElementById("firebaseSetupNotice");
-const form = document.getElementById("subscriptionForm");
-const frequencySelect = document.getElementById("frequency");
-const customDaysField = document.getElementById("customDaysField");
-const listEl = document.getElementById("subscriptionsList");
-const timelineEl = document.getElementById("timeline");
-const totalMonthlyEl = document.getElementById("totalMonthly");
-const cardTemplate = document.getElementById("subscriptionCardTemplate");
-const addSubscriptionBtn = document.getElementById("addSubscriptionBtn");
+const displayCurrencySelect = $("displayCurrency");
+const exportCsvBtn = $("exportCsvBtn");
+const kpi = {
+  monthly: $("kpiMonthly"),
+  yearly: $("kpiYearly"),
+  next7: $("kpiNext7"),
+  next7Count: $("kpiNext7Count"),
+  next30: $("kpiNext30"),
+  next30Count: $("kpiNext30Count"),
+};
+const ratesNote = $("ratesNote");
+const memberSplitEl = $("memberSplit");
+const categoryBreakdownEl = $("categoryBreakdown");
+const windowButtons = [...document.querySelectorAll(".seg-btn")];
 
-const authStateBadge = document.getElementById("authStateBadge");
-const userInfoEl = document.getElementById("userInfo");
-const userAvatarEl = document.getElementById("userAvatar");
-const userNameEl = document.getElementById("userName");
-const userEmailEl = document.getElementById("userEmail");
-const googleSignInBtn = document.getElementById("googleSignInBtn");
-const signOutBtn = document.getElementById("signOutBtn");
+const authStateBadge = $("authStateBadge");
+const userInfoEl = $("userInfo");
+const userAvatarEl = $("userAvatar");
+const userInitialEl = $("userInitial");
+const userNameEl = $("userName");
+const userEmailEl = $("userEmail");
+const googleSignInBtn = $("googleSignInBtn");
+const signOutBtn = $("signOutBtn");
+const tryDemoLink = $("tryDemoLink");
+const demoMemberField = $("demoMemberField");
+const demoMemberSelect = $("demoMemberSelect");
 
-const joinForm = document.getElementById("joinForm");
-const familyCodeInput = document.getElementById("familyCodeInput");
-const inviteCodeInput = document.getElementById("inviteCodeInput");
-const connectFamilyBtn = document.getElementById("connectFamilyBtn");
-const generateFamilyBtn = document.getElementById("generateFamilyBtn");
-const createInviteBtn = document.getElementById("createInviteBtn");
-const createdInviteBox = document.getElementById("createdInviteBox");
-const createdInviteCode = document.getElementById("createdInviteCode");
-const createdShareCode = document.getElementById("createdShareCode");
-const spaceBadge = document.getElementById("spaceBadge");
-const spaceStatusText = document.getElementById("spaceStatusText");
+const joinForm = $("joinForm");
+const joinError = $("joinError");
+const familyCodeInput = $("familyCodeInput");
+const inviteCodeInput = $("inviteCodeInput");
+const connectFamilyBtn = $("connectFamilyBtn");
+const generateFamilyBtn = $("generateFamilyBtn");
+const createInviteBtn = $("createInviteBtn");
+const createdInviteBox = $("createdInviteBox");
+const createdInviteCode = $("createdInviteCode");
+const createdShareCode = $("createdShareCode");
+const spaceBadge = $("spaceBadge");
+const spaceStatusText = $("spaceStatusText");
 
+let service = null;
 let currentUser = null;
-let currentFamilyCode = (localStorage.getItem(FAMILY_CODE_KEY) || "").toUpperCase();
+let currentFamilyCode = (safeGet(FAMILY_CODE_KEY) || "").toUpperCase();
 let subscriptions = [];
 let stopSubscriptionsWatcher = null;
-let firebaseReady = false;
+let serviceReady = false;
+let renewalWindow = 30;
+let displayCurrency = CURRENCIES.includes(safeGet(DISPLAY_CURRENCY_KEY))
+  ? safeGet(DISPLAY_CURRENCY_KEY)
+  : DEMO
+    ? "EUR"
+    : "USD";
 
-function parseIsoDateOrNull(value) {
-  const str = String(value || "").trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(str)) return null;
-  const date = new Date(`${str}T00:00:00Z`);
-  return Number.isNaN(date.getTime()) ? null : str;
+// ---------- сообщения ----------
+
+let toastTimer = null;
+function notify(message, type = "ok") {
+  toastEl.textContent = message;
+  toastEl.className = `toast ${type === "error" ? "toast-error" : ""}`.trim();
+  toastEl.setAttribute("role", type === "error" ? "alert" : "status");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.add("hidden"), type === "error" ? 7000 : 3500);
 }
 
-function normalizeSubscription(raw) {
-  if (!raw || typeof raw !== "object") return null;
-
-  const name = String(raw.name || "").trim();
-  const cardName = String(raw.cardName || "").trim();
-  const cardLast4 = String(raw.cardLast4 || "").trim();
-  const frequency = String(raw.frequency || "").trim();
-  const price = Number(raw.price);
-  const nextChargeDate = parseIsoDateOrNull(raw.nextChargeDate);
-  const endDate = raw.endDate ? parseIsoDateOrNull(raw.endDate) : null;
-  const customDaysRaw = raw.customDays == null ? null : Number(raw.customDays);
-  const customDays = Number.isInteger(customDaysRaw) && customDaysRaw >= 1 ? customDaysRaw : null;
-
-  if (!name || !cardName || !/^\d{4}$/.test(cardLast4)) return null;
-  if (!ALLOWED_FREQUENCIES.has(frequency)) return null;
-  if (!Number.isFinite(price) || price < 0) return null;
-  if (!nextChargeDate) return null;
-  if (frequency === "custom-days" && customDays == null) return null;
-  if (frequency !== "custom-days" && customDays != null) return null;
-  if (endDate && endDate < nextChargeDate) return null;
-
-  return {
-    id: raw.id ? String(raw.id) : undefined,
-    name,
-    price,
-    frequency,
-    customDays,
-    nextChargeDate,
-    cardName,
-    cardLast4,
-    endDate,
-  };
+function showInlineError(el, message) {
+  if (!message) {
+    el.textContent = "";
+    el.classList.add("hidden");
+    return;
+  }
+  el.textContent = message;
+  el.classList.remove("hidden");
 }
 
-function normalizeSubscriptions(rawItems) {
-  if (!Array.isArray(rawItems)) return [];
-  return rawItems.map(normalizeSubscription).filter(Boolean);
-}
+// ---------- хранение ----------
 
 function cacheKeyForUserSpace(uid, familyCode) {
   return `${CACHE_KEY}:${uid}:${familyCode}`;
@@ -133,15 +181,19 @@ function cacheKeyForUserSpace(uid, familyCode) {
 
 function saveCache() {
   if (!currentUser || !currentFamilyCode) return;
-  localStorage.setItem(cacheKeyForUserSpace(currentUser.uid, currentFamilyCode), JSON.stringify(subscriptions));
+  safeSet(cacheKeyForUserSpace(currentUser.uid, currentFamilyCode), JSON.stringify(subscriptions));
 }
 
 function clearSensitiveLocalState() {
-  Object.keys(localStorage)
-    .filter((k) => k.startsWith(`${CACHE_KEY}:`))
-    .forEach((k) => localStorage.removeItem(k));
+  try {
+    Object.keys(localStorage)
+      .filter((k) => k.startsWith(`${CACHE_KEY}:`))
+      .forEach((k) => localStorage.removeItem(k));
+  } catch {
+    // нет доступа к хранилищу
+  }
 
-  localStorage.removeItem(FAMILY_CODE_KEY);
+  safeRemove(FAMILY_CODE_KEY);
   subscriptions = [];
   currentFamilyCode = "";
   familyCodeInput.value = "";
@@ -157,12 +209,14 @@ function clearSubscriptionsView() {
   render();
 }
 
-function daysUntil(dateStr) {
-  const now = new Date();
-  now.setHours(0, 0, 0, 0);
-  const target = new Date(dateStr);
-  target.setHours(0, 0, 0, 0);
-  return Math.ceil((target - now) / (1000 * 60 * 60 * 24));
+// ---------- даты/формат ----------
+
+function fmtDate(iso) {
+  return new Date(`${iso}T00:00:00`).toLocaleDateString("ru-RU");
+}
+
+function daysUntil(iso) {
+  return daysBetween(todayIso(), iso);
 }
 
 function statusByDays(days) {
@@ -174,29 +228,25 @@ function statusByDays(days) {
 function humanRemaining(days) {
   if (days < 0) return `просрочено на ${Math.abs(days)} дн.`;
   if (days === 0) return "сегодня";
-  if (days === 1) return "1 день";
-  return `${days} дн.`;
+  if (days === 1) return "завтра";
+  return `через ${days} дн.`;
 }
 
-function toMonthly(sub) {
-  const price = Number(sub.price || 0);
-  if (sub.frequency === "yearly") return price / 12;
-  if (sub.frequency === "custom-days") {
-    const days = Number(sub.customDays || 30);
-    return days > 0 ? price * (30 / days) : 0;
-  }
-  return price;
+function plural(n, one, few, many) {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return one;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return few;
+  return many;
 }
 
-function fmtCurrency(value) {
-  return `$${Number(value || 0).toFixed(2)}`;
-}
+// ---------- состояние UI ----------
 
 function setAuthUiLoggedOut() {
   authStateBadge.textContent = "Не вошли";
   authStateBadge.className = "sync-badge muted";
   userInfoEl.classList.add("hidden");
-  googleSignInBtn.disabled = false;
+  googleSignInBtn.disabled = !serviceReady;
   signOutBtn.disabled = true;
   connectFamilyBtn.disabled = true;
   generateFamilyBtn.disabled = true;
@@ -205,33 +255,60 @@ function setAuthUiLoggedOut() {
 }
 
 function setAuthUiLoggedIn(user) {
-  authStateBadge.textContent = "Вошли";
-  authStateBadge.className = "sync-badge ok";
+  authStateBadge.textContent = DEMO ? "Демо-участник" : "Вошли";
+  authStateBadge.className = DEMO ? "sync-badge warn" : "sync-badge ok";
   userInfoEl.classList.remove("hidden");
-  userAvatarEl.src = user.photoURL || "";
-  userAvatarEl.style.visibility = user.photoURL ? "visible" : "hidden";
-  userNameEl.textContent = user.displayName || "Пользователь";
+  const name = user.displayName || "Пользователь";
+  if (user.photoURL) {
+    userAvatarEl.src = user.photoURL;
+    userAvatarEl.alt = `Аватар: ${name}`;
+    userAvatarEl.classList.remove("hidden");
+    userInitialEl.classList.add("hidden");
+  } else {
+    userAvatarEl.removeAttribute("src");
+    userAvatarEl.classList.add("hidden");
+    userInitialEl.textContent = name.slice(0, 1).toUpperCase();
+    userInitialEl.classList.remove("hidden");
+  }
+  userNameEl.textContent = name;
   userEmailEl.textContent = user.email || "";
   googleSignInBtn.disabled = true;
   signOutBtn.disabled = false;
   connectFamilyBtn.disabled = false;
   generateFamilyBtn.disabled = false;
+  if (DEMO) demoMemberSelect.value = user.uid;
 }
 
 function setSpaceDisconnected() {
   spaceBadge.textContent = "Не подключено";
   spaceBadge.className = "sync-badge muted";
-  spaceStatusText.textContent = "Введите код пространства и инвайт-код.";
+  spaceStatusText.textContent = currentUser
+    ? "Введите код пространства и инвайт-код, или создайте новое пространство."
+    : "Сначала войдите, затем подключите пространство.";
   addSubscriptionBtn.disabled = true;
   createInviteBtn.disabled = true;
+  updateFormHint();
 }
 
 function setSpaceConnected(familyCode) {
   spaceBadge.textContent = `Пространство: ${familyCode}`;
   spaceBadge.className = "sync-badge ok";
-  spaceStatusText.textContent = "Синхронизация активна. Данные видны только участникам пространства.";
+  spaceStatusText.textContent = DEMO
+    ? "Демо-пространство. Данные видны только в этом браузере."
+    : "Синхронизация активна. Данные видны только участникам пространства.";
   addSubscriptionBtn.disabled = !currentUser;
   createInviteBtn.disabled = !currentUser;
+  updateFormHint();
+}
+
+function updateFormHint() {
+  const connected = Boolean(currentUser && currentFamilyCode && stopSubscriptionsWatcher);
+  if (connected) {
+    formHint.classList.add("hidden");
+    return;
+  }
+  formHint.textContent = "Чтобы добавлять подписки, войдите и подключите пространство.";
+  formHint.classList.remove("hidden");
 }
 
 function showCreatedInvite(familyCode, inviteCode) {
@@ -246,55 +323,167 @@ function hideCreatedInvite() {
   createdShareCode.textContent = "";
 }
 
+// ---------- рендер ----------
+
+function emptyNote(text) {
+  const p = document.createElement("p");
+  p.className = "empty-state";
+  p.textContent = text;
+  return p;
+}
+
+function emptyListText() {
+  if (!currentUser) return "Войдите и подключите пространство, чтобы увидеть подписки.";
+  if (!currentFamilyCode || !stopSubscriptionsWatcher) return "Подключите пространство, чтобы увидеть подписки.";
+  return "Подписок пока нет. Добавьте первую через форму ниже.";
+}
+
+function renderSummary(items) {
+  const t = totals(items, displayCurrency);
+  const today = todayIso();
+  const r7 = upcomingRenewals(items, today, 7, displayCurrency);
+  const r30 = upcomingRenewals(items, today, 30, displayCurrency);
+
+  kpi.monthly.textContent = formatMoney(t.monthly, displayCurrency);
+  kpi.yearly.textContent = formatMoney(t.yearly, displayCurrency);
+  kpi.next7.textContent = formatMoney(r7.total, displayCurrency);
+  kpi.next30.textContent = formatMoney(r30.total, displayCurrency);
+  kpi.next7Count.textContent = `${r7.items.length} ${plural(r7.items.length, "списание", "списания", "списаний")}`;
+  kpi.next30Count.textContent = `${r30.items.length} ${plural(r30.items.length, "списание", "списания", "списаний")}`;
+
+  const rates = EXCHANGE_RATES.perEur;
+  ratesNote.textContent = `Пересчёт по фиксированным курсам на ${fmtDate(EXCHANGE_RATES.asOf)} (не live): 1 EUR = ${rates.USD} USD = ${rates.RSD} RSD. Годовые и «каждые N дней» приведены к месяцу.`;
+
+  renderBars(memberSplitEl, splitByMember(items, displayCurrency), "Нет данных по участникам.");
+  renderBars(categoryBreakdownEl, categoryBreakdown(items, displayCurrency), "Нет данных по категориям.");
+  exportCsvBtn.disabled = items.length === 0;
+}
+
+function renderBars(container, groups, emptyText) {
+  container.innerHTML = "";
+  if (!groups.length) {
+    const li = document.createElement("li");
+    li.append(emptyNote(emptyText));
+    container.append(li);
+    return;
+  }
+  const max = Math.max(...groups.map((g) => g.monthly), 0.0001);
+  for (const g of groups) {
+    const li = document.createElement("li");
+    li.className = "bar-row";
+    const head = document.createElement("div");
+    head.className = "bar-head";
+    const label = document.createElement("span");
+    label.className = "bar-label";
+    label.textContent = `${g.label} · ${g.count}`;
+    const value = document.createElement("span");
+    value.className = "bar-value";
+    value.textContent = `${formatMoney(g.monthly, displayCurrency)} / мес · ${g.share}%`;
+    head.append(label, value);
+    const track = document.createElement("div");
+    track.className = "bar-track";
+    track.setAttribute("aria-hidden", "true");
+    const fill = document.createElement("div");
+    fill.className = "bar-fill";
+    fill.style.width = `${Math.max(2, (g.monthly / max) * 100)}%`;
+    track.append(fill);
+    li.append(head, track);
+    container.append(li);
+  }
+}
+
 function renderTimeline(items) {
   timelineEl.innerHTML = "";
-  if (!items.length) {
-    const emptyText = document.createElement("p");
-    emptyText.className = "sub-meta";
-    emptyText.textContent = "Подписок пока нет.";
-    timelineEl.appendChild(emptyText);
+  const r = upcomingRenewals(items, todayIso(), renewalWindow, displayCurrency);
+  timelineTotalEl.textContent = items.length
+    ? `${r.items.length} ${plural(r.items.length, "списание", "списания", "списаний")} на ${formatMoney(
+        r.total,
+        displayCurrency
+      )} за ${renewalWindow} дней`
+    : "";
+
+  if (!r.items.length) {
+    const li = document.createElement("li");
+    li.className = "timeline-empty";
+    li.append(
+      emptyNote(items.length ? `В ближайшие ${renewalWindow} дней списаний нет.` : emptyListText())
+    );
+    timelineEl.appendChild(li);
     return;
   }
 
-  items
-    .slice()
-    .sort((a, b) => daysUntil(a.nextChargeDate) - daysUntil(b.nextChargeDate))
-    .forEach((sub) => {
-      const days = daysUntil(sub.nextChargeDate);
-      const status = statusByDays(days);
-      const el = document.createElement("div");
-      el.className = `timeline-item ${status === "normal" ? "" : status}`.trim();
+  for (const occ of r.items) {
+    const status = statusByDays(occ.inDays);
+    const el = document.createElement("li");
+    el.className = `timeline-item ${status === "normal" ? "" : status}`.trim();
 
-      const title = document.createElement("strong");
-      title.textContent = sub.name;
+    const title = document.createElement("strong");
+    title.textContent = occ.sub.name;
 
-      const price = document.createElement("p");
-      price.className = "sub-meta";
-      price.textContent = fmtCurrency(sub.price);
+    const price = document.createElement("p");
+    price.className = "sub-meta";
+    price.textContent = formatMoney(occ.amount, occ.sub.currency);
+    if (occ.sub.currency !== displayCurrency) {
+      price.textContent += ` ≈ ${formatMoney(occ.converted, displayCurrency)}`;
+    }
 
-      const chargeDate = document.createElement("p");
-      chargeDate.className = "sub-meta";
-      chargeDate.textContent = new Date(sub.nextChargeDate).toLocaleDateString("ru-RU");
+    const chargeDate = document.createElement("p");
+    chargeDate.className = "sub-meta";
+    chargeDate.textContent = fmtDate(occ.date);
 
-      const remaining = document.createElement("p");
-      remaining.className = "sub-meta";
-      remaining.textContent = `Через: ${humanRemaining(days)}`;
+    const remaining = document.createElement("p");
+    remaining.className = "sub-meta remaining";
+    remaining.textContent = humanRemaining(occ.inDays);
 
-      el.append(title, price, chargeDate, remaining);
-      timelineEl.appendChild(el);
-    });
+    el.append(title, price, chargeDate, remaining);
+    timelineEl.appendChild(el);
+  }
+}
+
+const HINT_LABELS = {
+  overlap: "Пересечение",
+  expensive: "Дорого",
+  "yearly-soon": "Годовое продление",
+  stale: "Устарело",
+};
+
+function renderHints(items) {
+  hintsListEl.innerHTML = "";
+  const hints = cancelCandidates(items, todayIso(), displayCurrency);
+  if (!hints.length) {
+    const li = document.createElement("li");
+    li.append(emptyNote(items.length ? "Явных кандидатов на отмену нет." : emptyListText()));
+    hintsListEl.append(li);
+    return;
+  }
+  for (const h of hints) {
+    const li = document.createElement("li");
+    li.className = `hint-item hint-${h.kind}`;
+    const tag = document.createElement("span");
+    tag.className = "hint-tag";
+    tag.textContent = HINT_LABELS[h.kind] || h.kind;
+    const text = document.createElement("span");
+    text.className = "hint-text";
+    text.textContent = h.text;
+    const money = document.createElement("span");
+    money.className = "hint-money";
+    money.textContent = `≈ ${formatMoney(h.monthly, displayCurrency)} / мес`;
+    li.append(tag, text, money);
+    hintsListEl.append(li);
+  }
 }
 
 function renderList(items) {
   listEl.innerHTML = "";
+  subsCountEl.textContent = String(items.length);
   if (!items.length) {
-    listEl.innerHTML = '<p class="sub-meta">Добавьте первую подписку через форму выше.</p>';
+    listEl.append(emptyNote(emptyListText()));
     return;
   }
 
   items
     .slice()
-    .sort((a, b) => daysUntil(a.nextChargeDate) - daysUntil(b.nextChargeDate))
+    .sort((a, b) => (a.nextChargeDate < b.nextChargeDate ? -1 : a.nextChargeDate > b.nextChargeDate ? 1 : 0))
     .forEach((sub) => {
       const node = cardTemplate.content.cloneNode(true);
       const card = node.querySelector(".sub-card");
@@ -305,31 +494,38 @@ function renderList(items) {
       if (status !== "normal") card.classList.add(status);
 
       node.querySelector(".sub-name").textContent = sub.name;
-      node.querySelector(".sub-meta").textContent = `${sub.frequency}${
-        sub.frequency === "custom-days" ? ` (${sub.customDays} дн.)` : ""
-      } • ${sub.cardName} • **** ${sub.cardLast4}`;
 
-      node.querySelector(".sub-dates").textContent = `Следующее списание: ${new Date(
-        sub.nextChargeDate
-      ).toLocaleDateString("ru-RU")} (через ${humanRemaining(daysToCharge)})${
-        sub.endDate
-          ? ` • Окончание: ${new Date(sub.endDate).toLocaleDateString("ru-RU")} (${humanRemaining(
-              daysToEnd
-            )})`
-          : ""
-      }`;
+      const tags = node.querySelector(".sub-tags");
+      const cat = document.createElement("span");
+      cat.className = "chip";
+      cat.textContent = sub.category || DEFAULT_CATEGORY;
+      const who = document.createElement("span");
+      who.className = "chip chip-muted";
+      who.textContent = memberLabel(sub.createdBy);
+      tags.append(cat, who);
 
-      node.querySelector(".sub-price").textContent = fmtCurrency(sub.price);
+      node.querySelector(".sub-meta").textContent = `${frequencyLabel(sub)} • ${sub.cardName} • **** ${sub.cardLast4}`;
+
+      node.querySelector(".sub-dates").textContent = `Следующее списание: ${fmtDate(sub.nextChargeDate)} (${humanRemaining(
+        daysToCharge
+      )})${sub.endDate ? ` • Окончание: ${fmtDate(sub.endDate)} (${humanRemaining(daysToEnd)})` : ""}`;
+
+      node.querySelector(".sub-price").textContent = formatMoney(sub.price, sub.currency);
+      const converted = node.querySelector(".sub-converted");
+      converted.textContent = `≈ ${formatMoney(monthlyIn(sub, displayCurrency), displayCurrency)} / мес`;
 
       const removeBtn = node.querySelector(".btn-danger");
+      removeBtn.setAttribute("aria-label", `Удалить подписку ${sub.name}`);
       removeBtn.disabled = !currentUser || !currentFamilyCode;
       removeBtn.addEventListener("click", async () => {
         if (!currentUser || !currentFamilyCode) return;
+        if (!window.confirm(`Удалить подписку «${sub.name}»? Она пропадёт у всех участников пространства.`)) return;
         removeBtn.disabled = true;
         try {
-          await removeSubscription(currentFamilyCode, sub.id);
-        } catch {
-          alert("Не удалось удалить подписку. Проверьте подключение к интернету.");
+          await service.removeSubscription(currentFamilyCode, sub.id);
+          notify(`Подписка «${sub.name}» удалена.`);
+        } catch (error) {
+          notify(`Не удалось удалить подписку. ${describeFirebaseError(error)}`, "error");
           removeBtn.disabled = false;
         }
       });
@@ -338,16 +534,14 @@ function renderList(items) {
     });
 }
 
-function renderTotal(items) {
-  const sum = items.reduce((acc, item) => acc + toMonthly(item), 0);
-  totalMonthlyEl.textContent = `${fmtCurrency(sum)} / мес`;
+function render() {
+  renderSummary(subscriptions);
+  renderTimeline(subscriptions);
+  renderHints(subscriptions);
+  renderList(subscriptions);
 }
 
-function render() {
-  renderTimeline(subscriptions);
-  renderList(subscriptions);
-  renderTotal(subscriptions);
-}
+// ---------- realtime ----------
 
 function stopRealtime() {
   if (stopSubscriptionsWatcher) {
@@ -362,10 +556,9 @@ async function startRealtimeForFamilyCode(familyCode) {
   stopRealtime();
   clearSubscriptionsView();
 
-  await touchMembership(familyCode, currentUser);
-  setSpaceConnected(familyCode);
+  await service.touchMembership(familyCode, currentUser);
 
-  stopSubscriptionsWatcher = watchSubscriptions(
+  stopSubscriptionsWatcher = service.watchSubscriptions(
     familyCode,
     (items) => {
       subscriptions = normalizeSubscriptions(items);
@@ -377,6 +570,7 @@ async function startRealtimeForFamilyCode(familyCode) {
       render();
     }
   );
+  setSpaceConnected(familyCode);
 }
 
 function parseJoinInput(familyRaw, inviteRaw) {
@@ -400,52 +594,95 @@ async function connectToSpace(rawFamilyCode, rawInviteCode) {
   const inviteCode = parsed.inviteCode;
 
   if (!FAMILY_CODE_RE.test(familyCode)) {
-    alert("Код пространства: 4–12 символов, только латиница и цифры.");
+    showInlineError(joinError, "Код пространства: 4–12 символов, только латиница и цифры.");
+    familyCodeInput.focus();
     return false;
   }
 
   try {
     if (!inviteCode) {
-      await bootstrapSpaceOwner(familyCode, currentUser);
+      await service.bootstrapSpaceOwner(familyCode, currentUser);
     } else {
       if (!INVITE_CODE_RE.test(inviteCode)) {
-        alert("Для подключения нужен инвайт-код (10–14 символов).");
+        showInlineError(joinError, "Для подключения нужен инвайт-код (10–14 символов).");
+        inviteCodeInput.focus();
         return false;
       }
-      await consumeInviteAndJoinFamily(familyCode, inviteCode, currentUser);
+      await service.consumeInviteAndJoinFamily(familyCode, inviteCode, currentUser);
     }
   } catch (error) {
-    alert(describeFirebaseError(error));
+    showInlineError(joinError, describeFirebaseError(error));
     return false;
   }
 
   currentFamilyCode = familyCode;
-  localStorage.setItem(FAMILY_CODE_KEY, familyCode);
+  safeSet(FAMILY_CODE_KEY, familyCode);
   familyCodeInput.value = familyCode;
 
   try {
     await startRealtimeForFamilyCode(familyCode);
+    notify(`Подключено к пространству ${familyCode}.`);
     return true;
   } catch (error) {
-    alert(describeFirebaseError(error));
+    showInlineError(joinError, describeFirebaseError(error));
     return false;
   }
 }
 
-function randomFamilyCode() {
+function randomCode(length) {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const bytes = new Uint32Array(length);
+  crypto.getRandomValues(bytes);
   let code = "";
-  for (let i = 0; i < 6; i += 1) code += alphabet[Math.floor(Math.random() * alphabet.length)];
+  for (let i = 0; i < length; i += 1) code += alphabet[bytes[i] % alphabet.length];
   return code;
 }
 
-function randomInviteCode() {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  const length = 12;
-  let code = "";
-  for (let i = 0; i < length; i += 1) code += alphabet[Math.floor(Math.random() * alphabet.length)];
-  return code;
+// ---------- обработчики ----------
+
+function fillSelect(select, values, selected) {
+  select.innerHTML = "";
+  for (const v of values) {
+    const opt = document.createElement("option");
+    opt.value = v;
+    opt.textContent = v;
+    if (v === selected) opt.selected = true;
+    select.append(opt);
+  }
 }
+
+fillSelect(displayCurrencySelect, CURRENCIES, displayCurrency);
+fillSelect($("currencySelect"), CURRENCIES, DEMO ? "EUR" : "USD");
+fillSelect($("categorySelect"), CATEGORIES, DEFAULT_CATEGORY);
+
+displayCurrencySelect.addEventListener("change", () => {
+  displayCurrency = displayCurrencySelect.value;
+  safeSet(DISPLAY_CURRENCY_KEY, displayCurrency);
+  render();
+});
+
+windowButtons.forEach((btn) => {
+  btn.addEventListener("click", () => {
+    renewalWindow = Number(btn.dataset.window);
+    windowButtons.forEach((b) => b.setAttribute("aria-pressed", String(b === btn)));
+    renderTimeline(subscriptions);
+  });
+});
+
+exportCsvBtn.addEventListener("click", () => {
+  if (!subscriptions.length) return;
+  const csv = toCsv(subscriptions, displayCurrency);
+  const blob = new Blob(["﻿", csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `tracksubfin-${DEMO ? "demo-" : ""}${todayIso()}.csv`;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  notify(`CSV выгружен: ${subscriptions.length} ${plural(subscriptions.length, "подписка", "подписки", "подписок")}.`);
+});
 
 frequencySelect.addEventListener("change", (e) => {
   const show = e.target.value === "custom-days";
@@ -456,25 +693,33 @@ frequencySelect.addEventListener("change", (e) => {
 googleSignInBtn.addEventListener("click", async () => {
   googleSignInBtn.disabled = true;
   try {
-    await loginWithGoogle();
-  } catch {
-    alert("Не удалось войти через Google. Проверьте Authorized domains.");
+    await service.loginWithGoogle();
+  } catch (error) {
+    const code = error?.code || "";
+    if (code === "auth/popup-closed-by-user" || code === "auth/cancelled-popup-request") {
+      notify("Вход отменён.");
+    } else if (code === "auth/popup-blocked") {
+      notify("Браузер заблокировал всплывающее окно входа. Разрешите pop-up для сайта.", "error");
+    } else {
+      notify("Не удалось войти через Google. Проверьте Authorized domains.", "error");
+    }
     googleSignInBtn.disabled = false;
   }
 });
 
 signOutBtn.addEventListener("click", async () => {
   try {
-    await logout();
+    await service.logout();
   } catch {
-    alert("Не удалось выйти из аккаунта.");
+    notify("Не удалось выйти из аккаунта.", "error");
   }
 });
 
 joinForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  showInlineError(joinError, "");
   if (!currentUser) {
-    alert("Сначала войдите через Google.");
+    showInlineError(joinError, "Сначала войдите через Google.");
     return;
   }
 
@@ -486,23 +731,23 @@ joinForm.addEventListener("submit", async (event) => {
   }
 });
 
-generateFamilyBtn.addEventListener("click", async () => {
-  const code = randomFamilyCode();
-  familyCodeInput.value = code;
+generateFamilyBtn.addEventListener("click", () => {
+  familyCodeInput.value = randomCode(6);
   inviteCodeInput.value = "";
+  showInlineError(joinError, "");
   spaceStatusText.textContent = "Код создан. Нажмите «Подключить» — пространство создастся и вы станете первым участником.";
 });
 
 createInviteBtn.addEventListener("click", async () => {
   if (!currentUser || !currentFamilyCode) return;
 
-  const inviteCode = randomInviteCode();
+  const inviteCode = randomCode(12);
   createInviteBtn.disabled = true;
   try {
-    await createInvite(currentFamilyCode, currentUser, inviteCode, 1, 72);
+    await service.createInvite(currentFamilyCode, currentUser, inviteCode, 1, 72);
     showCreatedInvite(currentFamilyCode, inviteCode);
   } catch (error) {
-    alert(describeFirebaseError(error));
+    showInlineError(joinError, describeFirebaseError(error));
   } finally {
     createInviteBtn.disabled = false;
   }
@@ -510,89 +755,141 @@ createInviteBtn.addEventListener("click", async () => {
 
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
+  showInlineError(formError, "");
 
   if (!currentUser || !currentFamilyCode) {
-    alert("Сначала войдите и подключите пространство.");
+    showInlineError(formError, "Сначала войдите и подключите пространство.");
     return;
   }
 
   const fd = new FormData(form);
-  const frequency = String(fd.get("frequency") || "").trim();
-  const price = Number(fd.get("price"));
-  const customDaysValue = Number(fd.get("customDays"));
-  const nextChargeDate = parseIsoDateOrNull(fd.get("nextChargeDate"));
-  const endDate = fd.get("endDate") ? parseIsoDateOrNull(fd.get("endDate")) : null;
-
-  if (!ALLOWED_FREQUENCIES.has(frequency)) return alert("Некорректная периодичность.");
-  if (!Number.isFinite(price) || price < 0) return alert("Цена должна быть числом не меньше 0.");
-  if (frequency === "custom-days" && !(Number.isInteger(customDaysValue) && customDaysValue >= 1)) {
-    return alert("Для «Каждые N дней» укажите целое количество дней (минимум 1).");
+  const input = Object.fromEntries(fd.entries());
+  const { entry, error } = validateSubscriptionInput(input, {
+    extendedFields: Boolean(service.capabilities?.extendedFields),
+  });
+  if (error) {
+    showInlineError(formError, error);
+    return;
   }
-  if (!nextChargeDate) return alert("Укажите корректную дату следующего списания.");
-  if (fd.get("endDate") && !endDate) return alert("Укажите корректную дату окончания.");
-  if (endDate && endDate < nextChargeDate) return alert("Дата окончания не может быть раньше списания.");
-
-  const entry = {
-    name: String(fd.get("name") || "").trim(),
-    price,
-    frequency,
-    customDays: frequency === "custom-days" ? customDaysValue : null,
-    nextChargeDate,
-    cardName: String(fd.get("cardName") || "").trim(),
-    cardLast4: String(fd.get("cardLast4") || "").trim(),
-    endDate,
-  };
 
   addSubscriptionBtn.disabled = true;
   try {
-    await createSubscription(currentFamilyCode, entry, currentUser);
+    await service.createSubscription(currentFamilyCode, entry, currentUser);
     form.reset();
     customDaysField.classList.add("hidden");
     customDaysField.querySelector("input").required = false;
-  } catch (error) {
-    alert(describeFirebaseError(error));
+    notify(`Подписка «${entry.name}» добавлена.`);
+  } catch (err) {
+    showInlineError(formError, describeFirebaseError(err));
   } finally {
     addSubscriptionBtn.disabled = !currentUser || !currentFamilyCode;
   }
 });
 
-render();
-familyCodeInput.value = currentFamilyCode;
+// ---------- запуск ----------
 
-if (!hasFirebaseConfig()) {
-  firebaseSetupNotice.classList.remove("hidden");
-  setAuthUiLoggedOut();
-  setSpaceDisconnected();
-} else {
-  initFirebase();
-  firebaseReady = true;
-  watchAuth(async (user) => {
-    currentUser = user;
+async function onAuthChanged(user) {
+  currentUser = user;
 
-    if (!firebaseReady) return;
+  if (user) {
+    setAuthUiLoggedIn(user);
+    hideCreatedInvite();
 
-    if (user) {
-      setAuthUiLoggedIn(user);
-      hideCreatedInvite();
-
-      if (currentFamilyCode) {
-        try {
-          await startRealtimeForFamilyCode(currentFamilyCode);
-        } catch (error) {
-          stopRealtime();
-          clearSubscriptionsView();
-          setSpaceDisconnected();
-          spaceBadge.textContent = `Пространство: ${currentFamilyCode}`;
-          spaceBadge.className = "sync-badge warn";
-          spaceStatusText.textContent = describeFirebaseError(error);
-        }
-      } else {
+    if (currentFamilyCode) {
+      try {
+        await startRealtimeForFamilyCode(currentFamilyCode);
+      } catch (error) {
+        stopRealtime();
+        clearSubscriptionsView();
         setSpaceDisconnected();
+        spaceBadge.textContent = `Пространство: ${currentFamilyCode}`;
+        spaceBadge.className = "sync-badge warn";
+        spaceStatusText.textContent = describeFirebaseError(error);
       }
     } else {
-      stopRealtime();
-      setAuthUiLoggedOut();
-      clearSensitiveLocalState();
+      setSpaceDisconnected();
+      render();
     }
+  } else {
+    stopRealtime();
+    setAuthUiLoggedOut();
+    clearSensitiveLocalState();
+  }
+}
+
+function setupDemoUi(demo) {
+  document.body.classList.add("is-demo");
+  document.title = "TrackSubFin — демо";
+  demoBanner.classList.remove("hidden");
+  googleSignInBtn.classList.add("hidden");
+  signOutBtn.classList.add("hidden");
+  tryDemoLink.classList.add("hidden");
+  demoMemberField.classList.remove("hidden");
+  document.querySelectorAll(".ext-field").forEach((el) => el.classList.remove("hidden"));
+
+  demoMemberSelect.innerHTML = "";
+  for (const m of demo.members) {
+    const opt = document.createElement("option");
+    opt.value = m.uid;
+    opt.textContent = m.displayName;
+    demoMemberSelect.append(opt);
+  }
+  demoMemberSelect.addEventListener("change", () => demo.switchUser(demoMemberSelect.value));
+
+  if (!currentFamilyCode) currentFamilyCode = demo.familyCode;
+  familyCodeInput.value = currentFamilyCode;
+
+  resetDemoBtn.addEventListener("click", async () => {
+    if (!window.confirm("Сбросить демо-данные к исходному набору? Ваши изменения в демо пропадут.")) return;
+    stopRealtime();
+    safeRemove(FAMILY_CODE_KEY);
+    currentFamilyCode = demo.familyCode;
+    familyCodeInput.value = currentFamilyCode;
+    inviteCodeInput.value = "";
+    hideCreatedInvite();
+    showInlineError(joinError, "");
+    await demo.resetDemo();
+    notify("Демо-данные сброшены.");
   });
 }
+
+async function boot() {
+  familyCodeInput.value = currentFamilyCode;
+  render();
+
+  if (DEMO) {
+    const mod = await import("./demo-service.js");
+    service = mod.default;
+    setupDemoUi(service);
+  } else {
+    if (!window.TRACKSUBFIN_FIREBASE_CONFIG) {
+      firebaseSetupNotice.classList.remove("hidden");
+      setAuthUiLoggedOut();
+      setSpaceDisconnected();
+      return;
+    }
+    try {
+      service = await import("./firebase-service.js");
+    } catch (error) {
+      console.warn("Firebase SDK load failed", error);
+      bootErrorNotice.classList.remove("hidden");
+      setAuthUiLoggedOut();
+      setSpaceDisconnected();
+      return;
+    }
+    if (!service.hasFirebaseConfig()) {
+      firebaseSetupNotice.classList.remove("hidden");
+      setAuthUiLoggedOut();
+      setSpaceDisconnected();
+      return;
+    }
+  }
+
+  service.initFirebase();
+  serviceReady = true;
+  setAuthUiLoggedOut();
+  setSpaceDisconnected();
+  service.watchAuth(onAuthChanged);
+}
+
+boot();
