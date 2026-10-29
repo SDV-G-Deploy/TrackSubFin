@@ -5,8 +5,10 @@
   "scripts": {
     "lint:smoke": "node --check app.js && node --check firebase-service.js && node --check logic.js && node --check demo-service.js",
     "test": "node --test tests/logic.test.mjs tests/demo-service.test.mjs tests/rules-sync.test.mjs",
-    "test:rules": "node tests/firestore.rules.test.mjs",
-    "test:rules:emulator": "firebase emulators:exec --only firestore --project demo-tracksubfin \"npm run test:rules\""
+    "test:rules": "node tests/firestore.rules.prod.test.mjs && node tests/firestore.rules.next.test.mjs",
+    "test:rules:emulator": "firebase emulators:exec --only firestore --project demo-tracksubfin \"npm run test:rules\"",
+    "test:rules:prod": "node tests/firestore.rules.prod.test.mjs",
+    "test:rules:next": "node tests/firestore.rules.next.test.mjs"
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^4.0.1",

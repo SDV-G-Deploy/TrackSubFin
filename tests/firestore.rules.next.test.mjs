@@ -1,5 +1,5 @@
 // Тесты Firestore Rules. Запуск только против эмулятора (offline-проект demo-*):
-//   npm run test:rules:emulator
+//   npm run test:rules:emulator  (этот файл проверяет firestore.rules.next)
 // или вручную:
 //   firebase emulators:exec --only firestore --project demo-tracksubfin "npm run test:rules"
 import fs from "node:fs/promises";
@@ -13,7 +13,7 @@ import {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const rules = await fs.readFile(path.resolve(__dirname, "../firestore.rules"), "utf8");
+const rules = await fs.readFile(path.resolve(__dirname, "../firestore.rules.next"), "utf8");
 
 const testEnv = await initializeTestEnvironment({
   projectId: "demo-tracksubfin",
@@ -232,10 +232,10 @@ run().then(
     const failed = results.filter((r) => !r.ok);
     if (failed.length) {
       for (const f of failed) console.error(`\n${f.name}:\n`, f.error?.message || f.error);
-      console.error(`\n${failed.length}/${results.length} rules tests failed`);
+      console.error(`\n${failed.length}/${results.length} rules tests failed (firestore.rules.next)`);
       process.exit(1);
     }
-    console.log(`\nall ${results.length} rules tests passed`);
+    console.log(`\nall ${results.length} rules tests passed (firestore.rules.next)`);
   },
   async (err) => {
     console.error(err);

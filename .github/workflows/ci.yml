@@ -62,5 +62,7 @@ jobs:
 
       # Offline demo-* project id: the emulator never talks to a real Firebase project,
       # no credentials are needed and nothing is deployed.
-      - name: Rules tests on the Firestore emulator
+      # Runs tests/firestore.rules.prod.test.mjs (deployed firestore.rules vs the app's real-mode writes)
+      # and tests/firestore.rules.next.test.mjs (future firestore.rules.next).
+      - name: Rules tests on the Firestore emulator (production + next)
         run: npm run test:rules:emulator

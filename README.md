@@ -36,21 +36,42 @@
 8. «Создать код» → «Подключить» — новое пустое пространство (пустые состояния).
    «Сбросить демо-данные» — вернуть исходный набор.
 
-### Валюта и категория (демо и реальный режим)
+### Валюта и категория: сейчас только в демо
 
-Поля `currency` (`EUR` / `USD` / `RSD`) и `category` (список `CATEGORIES` в `logic.js`) включены и в
-реальном режиме (`capabilities.extendedFields = true` в `firebase-service.js`). `firestore.rules`
-принимает их как **необязательные** поля со строгой проверкой значения (`validOptionalSubscriptionFields`);
-любые другие ключи по-прежнему отклоняются. Старые записи без этих полей остаются валидными, считаются
-в USD (как раньше — `$`) и попадают в категорию «Другое»; их можно отредактировать и указать валюту.
+| | Демо (`?demo=1`) | Реальный режим (Firebase) |
+|---|---|---|
+| Добавление / удаление подписок | да | да |
+| Редактирование (кнопка «Изменить», только автор) | да | да |
+| Поля `currency` / `category` в форме и в записи | да | **нет** (`capabilities.extendedFields = false`) |
+| Сводка, прогноз, разбивки, CSV | да | да (записи без валюты считаются в USD, категория «Другое») |
 
-> **Важно: владелец проекта должен задеплоить rules** (см. «Деплой Firestore rules») **до или вместе с**
-> выкладкой этого кода на GitHub Pages. Пока в Firebase старые rules, добавление/изменение подписок
-> в реальном режиме вернёт `permission-denied` (приложение покажет подсказку об этом).
-> Ни CI, ни этот репозиторий rules автоматически не деплоят.
+Почему так: GitHub Pages выкладывается автоматически при мерже в `main`, а Firestore rules деплоятся
+вручную. **`firestore.rules` в репозитории = rules, задеплоенные сейчас в Firebase.** Они отклоняют любые
+лишние ключи, поэтому в реальном режиме клиент шлёт только старую форму документа (без `currency` /
+`category`, и без `customDays` для monthly/yearly). Это проверяет `tests/firestore.rules.prod.test.mjs`
+на эмуляторе: создание monthly / yearly / custom-days и редактирование ровно теми payload, которые
+формирует приложение (`validateSubscriptionInput` → `buildSubscriptionDoc` / `buildSubscriptionPatch`
+из `logic.js`).
 
-Списки валют/категорий в `firestore.rules` и `logic.js` должны совпадать — это проверяет
-`tests/rules-sync.test.mjs` (входит в `npm test`).
+Будущие rules с полями валюты/категории лежат в **`firestore.rules.next`** (проверяются
+`tests/firestore.rules.next.test.mjs`; списки валют/категорий синхронизированы с `logic.js` —
+`tests/rules-sync.test.mjs`).
+
+#### Включение валюты и категории в реальном режиме (позже, владелец проекта)
+
+Порядок важен: сначала rules, потом код.
+
+1. Прогнать тесты: `npm test && npm run test:rules:emulator`.
+2. Задеплоить новые rules, не меняя код сайта:
+   ```bash
+   cp firestore.rules.next firestore.rules
+   firebase deploy --only firestore:rules
+   ```
+3. PR в `main`: `firestore.rules` = содержимое `firestore.rules.next` (файл `.next` можно удалить
+   или оставить равным), в `firebase-service.js` — `extendedFields: true`, в
+   `tests/firestore.rules.prod.test.mjs` — ожидание `extendedFields=true` и разрешённых полей.
+   `tests/rules-sync.test.mjs` не даст смержить `extendedFields: true` при старых `firestore.rules`.
+4. После мержа старые записи остаются валидными; у них можно указать валюту через «Изменить».
 
 ### Редактирование подписок
 
@@ -121,9 +142,10 @@
 
 ## Деплой Firestore rules
 
-Делает только владелец Firebase-проекта, вручную (CI rules не деплоит). Для этой ветки — обязательно
-до или одновременно с публикацией сайта, иначе поля валюты/категории будут отклоняться.
-Перед деплоем прогоните `npm run test:rules:emulator`.
+Делает только владелец Firebase-проекта, вручную (CI rules не деплоит). Текущий код сайта работает
+с уже задеплоенными `firestore.rules` — деплой для него не нужен. Новые rules (`firestore.rules.next`)
+деплоятся по шагам из раздела «Включение валюты и категории». Перед деплоем прогоните
+`npm run test:rules:emulator`.
 
 ```bash
 npm i -g firebase-tools
@@ -141,9 +163,14 @@ firebase firestore:rules:get
 
 ## Security regression checks (минимум)
 
-Тесты правил для Firebase Emulator — `tests/firestore.rules.test.mjs` (41 кейс: bootstrap/инвайты,
-доступ не-участников, валидные/невалидные `currency`/`category`, лишние поля, редактирование
-только автором, неизменяемый `createdAt`).
+Тесты правил для Firebase Emulator (`npm run test:rules` запускает оба файла):
+
+- `tests/firestore.rules.prod.test.mjs` — **задеплоенные** `firestore.rules` против записей, которые
+  реально шлёт приложение в режиме Firebase: bootstrap, инвайты, создание monthly / yearly /
+  custom-days, редактирование (смена периодичности с удалением `customDays`, `endDate`), удаление;
+  плюс отказ для `currency`/`category`, `customDays: null`, чужих правок и не-участников.
+- `tests/firestore.rules.next.test.mjs` — будущие `firestore.rules.next` (41 кейс: валидные/невалидные
+  `currency`/`category`, лишние поля, редактирование только автором, неизменяемый `createdAt`).
 
 Запуск с эмулятором (нужны Java 21 и firebase-tools; offline-проект `demo-tracksubfin` не обращается
 к реальному Firebase и ничего не деплоит):
@@ -179,6 +206,8 @@ rules-тесты на Firestore emulator. Деплой сайта — отдел
 - `logic.js` — чистые функции без DOM (итоги, продления, подсказки, CSV)
 - `firebase-service.js` — Firebase Auth + Firestore
 - `demo-service.js` — демо-адаптер на `localStorage`
+- `firestore.rules` — rules, задеплоенные сейчас в Firebase (менять только вместе с деплоем)
+- `firestore.rules.next` — будущие rules с `currency`/`category` (ещё не задеплоены)
 
 ---
 

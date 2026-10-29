@@ -2,6 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   addMonths,
+  buildSubscriptionDoc,
+  buildSubscriptionPatch,
   cancelCandidates,
   categoryBreakdown,
   convert,
@@ -183,4 +185,21 @@ test("monthlyForecast buckets real charges by calendar month incl. yearly spike 
   // Feb: yearly spike
   assert.ok(f[4].total >= 130);
   assert.equal(monthlyForecast([], "2026-10-15", 3, "EUR", RATES).every((b) => b.total === 0), true);
+});
+
+test("buildSubscriptionDoc / buildSubscriptionPatch: real-mode shape", () => {
+  const input = {
+    name: "N", price: "5", currency: "EUR", category: "Видео", frequency: "monthly", customDays: "",
+    nextChargeDate: "2026-11-01", cardName: "C", cardLast4: "1234", endDate: "",
+  };
+  const { entry } = validateSubscriptionInput(input, { extendedFields: false });
+  const docData = buildSubscriptionDoc(entry, { uid: "u", email: undefined, displayName: "Имя" }, "TS");
+  assert.deepEqual(Object.keys(docData).sort(), [
+    "cardLast4", "cardName", "createdAt", "createdBy", "endDate", "frequency", "name", "nextChargeDate", "price",
+  ]);
+  assert.deepEqual(docData.createdBy, { uid: "u", email: null, name: "Имя" });
+  const DEL = Symbol("delete");
+  assert.equal(buildSubscriptionPatch(entry, DEL).customDays, DEL);
+  const custom = validateSubscriptionInput({ ...input, frequency: "custom-days", customDays: "7" }).entry;
+  assert.equal(buildSubscriptionPatch(custom, DEL).customDays, 7);
 });

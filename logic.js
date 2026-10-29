@@ -171,6 +171,33 @@ export function validateSubscriptionInput(input, { extendedFields = false } = {}
   return { entry };
 }
 
+/**
+ * Документ подписки для создания в Firestore (addDoc). createdAt — sentinel serverTimestamp()
+ * (или Date в тестах). Используется firebase-service.js и эмуляторными тестами rules, чтобы
+ * проверялась ровно та форма, которую отправляет приложение.
+ */
+export function buildSubscriptionDoc(entry, user, createdAt) {
+  return {
+    ...entry,
+    createdAt,
+    createdBy: {
+      uid: user.uid,
+      email: user.email || null,
+      name: user.displayName || null,
+    },
+  };
+}
+
+/**
+ * Патч для updateDoc при редактировании. Для monthly/yearly ключ customDays удаляется
+ * (deleteSentinel = deleteField()), т.к. rules требуют его отсутствия.
+ */
+export function buildSubscriptionPatch(entry, deleteSentinel) {
+  const patch = { ...entry };
+  if (patch.frequency !== "custom-days") patch.customDays = deleteSentinel;
+  return patch;
+}
+
 export function convert(amount, from, to, rates = EXCHANGE_RATES) {
   const fromRate = rates.perEur[from];
   const toRate = rates.perEur[to];
