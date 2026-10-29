@@ -272,6 +272,23 @@ export function createDemoService({ storage, now = () => new Date(), eventTarget
       emitSubs();
     },
 
+    // Как в firestore.rules: менять может только автор, createdAt/createdBy не меняются.
+    async updateSubscription(familyCode, subscriptionId, payload) {
+      const state = load();
+      const user = currentUser(state);
+      const space = requireMember(state, familyCode, user);
+      const idx = space.subscriptions.findIndex((s) => s.id === subscriptionId);
+      if (idx === -1) throw appError("NOT_FOUND", "not-found");
+      const prev = space.subscriptions[idx];
+      if (prev.createdBy?.uid !== user.uid) throw appError("PERMISSION_DENIED", "permission-denied");
+      const next = { ...prev, ...payload, id: prev.id, createdAt: prev.createdAt, createdBy: prev.createdBy };
+      if (next.frequency !== "custom-days") delete next.customDays;
+      if (!normalizeSubscription(next)) throw appError("INVALID_SUBSCRIPTION", "invalid-argument");
+      space.subscriptions[idx] = next;
+      persist(state);
+      emitSubs();
+    },
+
     async removeSubscription(familyCode, subscriptionId) {
       const state = load();
       const space = requireMember(state, familyCode, currentUser(state));
@@ -331,6 +348,7 @@ export const {
   touchMembership,
   watchSubscriptions,
   createSubscription,
+  updateSubscription,
   removeSubscription,
   switchUser,
   resetDemo,

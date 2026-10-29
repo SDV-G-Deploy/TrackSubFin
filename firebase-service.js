@@ -10,6 +10,7 @@ import {
   addDoc,
   collection,
   deleteDoc,
+  deleteField,
   doc,
   enableIndexedDbPersistence,
   getDoc,
@@ -24,9 +25,10 @@ import {
   writeBatch,
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
-// Режим адаптера. extendedFields=false: текущие Firestore Rules не разрешают
-// поля currency/category, поэтому в реальном режиме они не отправляются.
-export const capabilities = { mode: "firebase", extendedFields: false };
+// Режим адаптера. extendedFields=true: клиент отправляет currency/category.
+// Требует задеплоенных firestore.rules из этого репозитория (validOptionalSubscriptionFields),
+// иначе создание/изменение подписок вернёт permission-denied.
+export const capabilities = { mode: "firebase", extendedFields: true };
 
 export function hasFirebaseConfig() {
   const cfg = window.TRACKSUBFIN_FIREBASE_CONFIG;
@@ -256,6 +258,14 @@ export async function createSubscription(familyCode, payload, user) {
       name: user.displayName || null,
     },
   });
+}
+
+// Rules разрешают изменять только автору (createdBy.uid) и не дают менять createdAt/createdBy.
+export async function updateSubscription(familyCode, subscriptionId, payload) {
+  const ref = doc(db, "spaces", familyCode, "subscriptions", subscriptionId);
+  const patch = { ...payload };
+  if (patch.frequency !== "custom-days") patch.customDays = deleteField();
+  await updateDoc(ref, patch);
 }
 
 export async function removeSubscription(familyCode, subscriptionId) {

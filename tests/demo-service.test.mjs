@@ -16,7 +16,7 @@ test("exposes the same interface as firebase-service.js", () => {
   const required = [
     "hasFirebaseConfig", "initFirebase", "watchAuth", "loginWithGoogle", "logout", "isFamilyMember",
     "createInvite", "bootstrapSpaceOwner", "consumeInviteAndJoinFamily", "touchMembership",
-    "watchSubscriptions", "createSubscription", "removeSubscription", "capabilities",
+    "watchSubscriptions", "createSubscription", "updateSubscription", "removeSubscription", "capabilities",
   ];
   for (const name of required) assert.ok(name in firebaseLikeExports, `missing export ${name}`);
 });
@@ -129,4 +129,40 @@ test("resetDemo restores seed; corrupted storage is reseeded", async () => {
   assert.ok(svc.getState().spaces[DEMO_FAMILY_CODE].subscriptions.some((s) => s.id === "demo-01"));
   storage.setItem(DEMO_STORAGE_KEY, "{not json");
   assert.equal(createDemoService({ storage, now: NOW }).getState().version, 1);
+});
+
+test("updateSubscription: author edits, other member denied, customDays dropped, createdAt kept", async () => {
+  const svc = createDemoService({ storage: memStorage(), now: NOW });
+  svc.initFirebase();
+  await svc.switchUser("demo-anya");
+  let last = [];
+  svc.watchSubscriptions(DEMO_FAMILY_CODE, (x) => (last = x));
+  const anya = DEMO_MEMBERS.find((m) => m.uid === "demo-anya");
+  await svc.createSubscription(
+    DEMO_FAMILY_CODE,
+    { name: "Gym", price: 30, currency: "EUR", category: "Спорт", frequency: "custom-days", customDays: 28,
+      nextChargeDate: "2026-11-02", cardName: "Visa", cardLast4: "4242", endDate: null },
+    anya
+  );
+  const created = last.find((s) => s.name === "Gym");
+  await svc.updateSubscription(DEMO_FAMILY_CODE, created.id, {
+    name: "Gym+", price: 35, currency: "RSD", category: "Спорт", frequency: "monthly",
+    nextChargeDate: "2026-11-05", cardName: "Visa", cardLast4: "4242", endDate: null,
+  });
+  const updated = last.find((s) => s.id === created.id);
+  assert.equal(updated.name, "Gym+");
+  assert.equal(updated.currency, "RSD");
+  assert.equal("customDays" in updated, false);
+  assert.equal(updated.createdAt, created.createdAt);
+  assert.deepEqual(updated.createdBy, created.createdBy);
+
+  await svc.switchUser("demo-sergey");
+  await assert.rejects(
+    svc.updateSubscription(DEMO_FAMILY_CODE, created.id, { ...updated, name: "hijack" }),
+    (e) => e.code === "permission-denied"
+  );
+  await assert.rejects(
+    svc.updateSubscription(DEMO_FAMILY_CODE, "nope", { name: "x" }),
+    (e) => e.code === "not-found"
+  );
 });
