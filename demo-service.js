@@ -41,7 +41,7 @@ export function buildSeedSubscriptions(today) {
     { name: "Фитнес-клуб", price: 4900, currency: "RSD", category: "Спорт", frequency: "monthly", nextChargeDate: d(26), ...intesa, createdBy: by(anya) },
     { name: "Adobe Lightroom", price: 11.99, currency: "USD", category: "Софт", frequency: "monthly", nextChargeDate: d(14), endDate: d(75), ...raiff, createdBy: by(sergey) },
     { name: "JetBrains All Products", price: 289, currency: "USD", category: "Софт", frequency: "yearly", nextChargeDate: d(140), ...raiff, createdBy: by(sergey) },
-    { name: "1Password Families", price: 59.88, currency: "USD", category: "Облако", frequency: "yearly", nextChargeDate: d(201), ...raiff, createdBy: by(sergey) },
+    { name: "1Password Families", price: 59.88, currency: "USD", category: "Софт", frequency: "yearly", nextChargeDate: d(201), ...raiff, createdBy: by(sergey) },
   ];
   return list.map((s, i) => ({
     id: `demo-${String(i + 1).padStart(2, "0")}`,
