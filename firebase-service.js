@@ -6,10 +6,12 @@ import {
   signInWithPopup,
   signOut,
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+import { buildSubscriptionDoc, buildSubscriptionPatch } from "./logic.js";
 import {
   addDoc,
   collection,
   deleteDoc,
+  deleteField,
   doc,
   enableIndexedDbPersistence,
   getDoc,
@@ -23,6 +25,12 @@ import {
   updateDoc,
   writeBatch,
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+
+// Режим адаптера.
+// extendedFields=false: клиент НЕ отправляет currency/category — так работают задеплоенные
+// (production) firestore.rules, они отклоняют любые лишние ключи.
+// Включать (true) только ПОСЛЕ деплоя firestore.rules.next — см. README, «Включение валюты и категории».
+export const capabilities = { mode: "firebase", extendedFields: false };
 
 export function hasFirebaseConfig() {
   const cfg = window.TRACKSUBFIN_FIREBASE_CONFIG;
@@ -243,15 +251,13 @@ export function watchSubscriptions(familyCode, callback, onError) {
 
 export async function createSubscription(familyCode, payload, user) {
   const col = subscriptionsCollection(familyCode);
-  await addDoc(col, {
-    ...payload,
-    createdAt: serverTimestamp(),
-    createdBy: {
-      uid: user.uid,
-      email: user.email || null,
-      name: user.displayName || null,
-    },
-  });
+  await addDoc(col, buildSubscriptionDoc(payload, user, serverTimestamp()));
+}
+
+// Rules разрешают изменять только автору (createdBy.uid) и не дают менять createdAt/createdBy.
+export async function updateSubscription(familyCode, subscriptionId, payload) {
+  const ref = doc(db, "spaces", familyCode, "subscriptions", subscriptionId);
+  await updateDoc(ref, buildSubscriptionPatch(payload, deleteField()));
 }
 
 export async function removeSubscription(familyCode, subscriptionId) {
