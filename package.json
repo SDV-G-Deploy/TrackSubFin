@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "lint:smoke": "node --check app.js && node --check firebase-service.js",
+    "lint:smoke": "node --check app.js && node --check firebase-service.js && node --check logic.js && node --check demo-service.js",
+    "test": "node --test tests/logic.test.mjs tests/demo-service.test.mjs",
     "test:rules": "node tests/firestore.rules.test.mjs"
   },
   "devDependencies": {
