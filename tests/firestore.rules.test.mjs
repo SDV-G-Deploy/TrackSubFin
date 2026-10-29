@@ -58,6 +58,35 @@ async function run() {
   // 3) stranger cannot read subscriptions without membership
   await assertFails(subRef.get());
 
+  // 4) member can create a monthly subscription in the shape the client sends
+  //    (no customDays key for monthly/yearly, no currency/category).
+  const baseSub = {
+    name: "Netflix",
+    price: 9.99,
+    frequency: "monthly",
+    nextChargeDate: "2026-11-01",
+    cardName: "Visa",
+    cardLast4: "1234",
+    endDate: null,
+    createdAt: new Date(),
+    createdBy: { uid: "owner-uid", email: "owner@example.com", name: "Owner" },
+  };
+  await assertSucceeds(owner.doc("spaces/FAM123/subscriptions/ok1").set(baseSub));
+
+  // 5) customDays: null for monthly is rejected by rules — client must omit the key
+  await assertFails(owner.doc("spaces/FAM123/subscriptions/bad1").set({ ...baseSub, customDays: null }));
+
+  // 6) extended demo-only fields are not accepted by current rules
+  await assertFails(owner.doc("spaces/FAM123/subscriptions/bad2").set({ ...baseSub, currency: "EUR" }));
+
+  // 7) stranger cannot create subscriptions
+  await assertFails(
+    stranger.doc("spaces/FAM123/subscriptions/bad3").set({
+      ...baseSub,
+      createdBy: { uid: "stranger-uid", email: null, name: null },
+    })
+  );
+
   await testEnv.cleanup();
 }
 
