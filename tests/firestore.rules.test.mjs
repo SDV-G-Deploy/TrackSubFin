@@ -12,7 +12,7 @@ const __dirname = path.dirname(__filename);
 const rules = await fs.readFile(path.resolve(__dirname, "../firestore.rules"), "utf8");
 
 const testEnv = await initializeTestEnvironment({
-  projectId: "tracksubfin-rules-test",
+  projectId: "demo-tracksubfin",
   firestore: { rules },
 });
 

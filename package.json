@@ -5,10 +5,14 @@
   "scripts": {
     "lint:smoke": "node --check app.js && node --check firebase-service.js && node --check logic.js && node --check demo-service.js",
     "test": "node --test tests/logic.test.mjs tests/demo-service.test.mjs",
-    "test:rules": "node tests/firestore.rules.test.mjs"
+    "test:rules": "node tests/firestore.rules.test.mjs",
+    "test:rules:emulator": "firebase emulators:exec --only firestore --project demo-tracksubfin \"npm run test:rules\""
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^4.0.1",
-    "firebase": "^10.12.5"
+    "firebase": "^11.10.0"
+  },
+  "overrides": {
+    "@grpc/grpc-js": "^1.14.7"
   }
 }
