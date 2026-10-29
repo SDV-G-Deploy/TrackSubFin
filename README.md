@@ -36,13 +36,33 @@
 8. «Создать код» → «Подключить» — новое пустое пространство (пустые состояния).
    «Сбросить демо-данные» — вернуть исходный набор.
 
-### Валюта и категория
+### Валюта и категория (демо и реальный режим)
 
-Поля `currency` и `category` есть только в демо. Текущие Firestore Rules разрешают фиксированный
-набор ключей подписки, поэтому в реальном режиме эти поля скрыты и не отправляются; старые записи
-считаются в USD (как раньше — `$`) и попадают в категорию «Другое». Чтобы включить их в реальном
-режиме, нужно расширить `hasOnlyAllowedSubscriptionKeys` в `firestore.rules` (с проверкой значений),
-задеплоить rules и выставить `capabilities.extendedFields = true` в `firebase-service.js`.
+Поля `currency` (`EUR` / `USD` / `RSD`) и `category` (список `CATEGORIES` в `logic.js`) включены и в
+реальном режиме (`capabilities.extendedFields = true` в `firebase-service.js`). `firestore.rules`
+принимает их как **необязательные** поля со строгой проверкой значения (`validOptionalSubscriptionFields`);
+любые другие ключи по-прежнему отклоняются. Старые записи без этих полей остаются валидными, считаются
+в USD (как раньше — `$`) и попадают в категорию «Другое»; их можно отредактировать и указать валюту.
+
+> **Важно: владелец проекта должен задеплоить rules** (см. «Деплой Firestore rules») **до или вместе с**
+> выкладкой этого кода на GitHub Pages. Пока в Firebase старые rules, добавление/изменение подписок
+> в реальном режиме вернёт `permission-denied` (приложение покажет подсказку об этом).
+> Ни CI, ни этот репозиторий rules автоматически не деплоят.
+
+Списки валют/категорий в `firestore.rules` и `logic.js` должны совпадать — это проверяет
+`tests/rules-sync.test.mjs` (входит в `npm test`).
+
+### Редактирование подписок
+
+Кнопка «Изменить» на карточке — форма переключается в режим редактирования. Как и в rules,
+менять подписку может только её автор (`createdBy.uid`); `createdAt`/`createdBy` не меняются.
+Удалять может любой участник пространства.
+
+### Прогноз списаний по месяцам
+
+В «Сводке» — столбики фактических списаний по календарным месяцам на 12 месяцев вперёд
+(с учётом периодичности, годовых продлений и даты окончания), пунктир — среднее, подпись — пик.
+Текущий месяц считается с сегодняшнего дня. Наведение/фокус на столбик — сумма и число списаний.
 
 ### Курсы валют
 
@@ -101,6 +121,10 @@
 
 ## Деплой Firestore rules
 
+Делает только владелец Firebase-проекта, вручную (CI rules не деплоит). Для этой ветки — обязательно
+до или одновременно с публикацией сайта, иначе поля валюты/категории будут отклоняться.
+Перед деплоем прогоните `npm run test:rules:emulator`.
+
 ```bash
 npm i -g firebase-tools
 firebase login
@@ -117,15 +141,21 @@ firebase firestore:rules:get
 
 ## Security regression checks (минимум)
 
-В проект добавлен скелет теста правил для Firebase Emulator:
-- `tests/firestore.rules.test.mjs`
-- script: `npm run test:rules` (после `npm i`)
+Тесты правил для Firebase Emulator — `tests/firestore.rules.test.mjs` (41 кейс: bootstrap/инвайты,
+доступ не-участников, валидные/невалидные `currency`/`category`, лишние поля, редактирование
+только автором, неизменяемый `createdAt`).
 
-Запуск с эмулятором (нужны Java и firebase-tools; проект `demo-*` не обращается к реальному Firebase):
+Запуск с эмулятором (нужны Java 21 и firebase-tools; offline-проект `demo-tracksubfin` не обращается
+к реальному Firebase и ничего не деплоит):
 ```bash
-npm i --legacy-peer-deps   # @firebase/rules-unit-testing@4 объявляет peer firebase@11
-firebase emulators:exec --only firestore --project demo-tracksubfin "npm run test:rules"
+npm ci
+npm i -g firebase-tools
+npm run test:rules:emulator
+# = firebase emulators:exec --only firestore --project demo-tracksubfin "npm run test:rules"
 ```
+
+Пакет `firebase` в `devDependencies` нужен только тестам (`@firebase/rules-unit-testing@4` требует
+`firebase@11`). Само приложение грузит Firebase SDK 10.12.5 с CDN `gstatic.com` и от npm не зависит.
 
 Быстрый smoke-check синтаксиса JS:
 ```bash
@@ -137,6 +167,11 @@ Unit-тесты чистой логики (итоги, пересчёт валю
 ```bash
 npm test
 ```
+
+### CI
+
+`.github/workflows/ci.yml` на каждый PR (и push в `main`): `npm ci`, `lint:smoke`, `npm test` и
+rules-тесты на Firestore emulator. Деплой сайта — отдельный `pages.yml` (только `main`).
 
 ## Файлы
 
