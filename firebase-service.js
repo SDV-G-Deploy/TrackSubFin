@@ -24,6 +24,10 @@ import {
   writeBatch,
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
+// Режим адаптера. extendedFields=false: текущие Firestore Rules не разрешают
+// поля currency/category, поэтому в реальном режиме они не отправляются.
+export const capabilities = { mode: "firebase", extendedFields: false };
+
 export function hasFirebaseConfig() {
   const cfg = window.TRACKSUBFIN_FIREBASE_CONFIG;
   return Boolean(cfg && cfg.apiKey && cfg.projectId && cfg.appId);
